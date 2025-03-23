@@ -322,7 +322,6 @@ def select_pulling():
     else:
         pulling_count = 3  # Valor por defecto para el GET
 
-    # Generar el HTML del formulario con slider y selects
     form_html = f"""
     <div class="mb-3">
         <label for="pulling_count" class="form-label">Cantidad de Pulling:</label>
@@ -342,7 +341,7 @@ def select_pulling():
             <hr>
         """
     form_html += "</div>"
-
+    
     # Incluir JavaScript para actualizar dinámicamente el formulario
     form_html += f"""
     <script>
@@ -351,10 +350,10 @@ def select_pulling():
         let pullingSelectsDiv = document.getElementById("pulling_selects");
         let newHtml = "";
         for (let i = 1; i <= value; i++) {{
-            newHtml += `<h3>Pulling ${i}</h3>
-                        <label>Pozo para Pulling ${i}:</label>
+            newHtml += `<h3>Pulling ${{i}}</h3>
+                        <label>Pozo para Pulling ${{i}}:</label>
                         <select name="pulling_pozo_${{i}}" class="form-select w-50">
-                            ${document.getElementById("hidden_options").innerHTML}
+                            ${{{{document.getElementById("hidden_options").innerHTML}}}}
                         </select><br><hr>`;
         }}
         pullingSelectsDiv.innerHTML = newHtml;
