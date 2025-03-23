@@ -145,6 +145,8 @@ def process_excel(file_path):
     # --- Operaciones de filtrado y ordenamiento ---
     # Ordenar de mayor a menor por "Pérdida [m3/d]" y obtener preview de 20 filas
     if "Pérdida [m3/d]" in df.columns:
+        # Convertir los valores a numérico; los valores que no se puedan convertir se vuelven NaN
+        df["Pérdida [m3/d]"] = pd.to_numeric(df["Pérdida [m3/d]"], errors="coerce")
         df.sort_values(by="Pérdida [m3/d]", ascending=False, inplace=True)
     preview_df = df.head(20)
 
