@@ -280,7 +280,7 @@ def filter_zonas():
 def select_pulling():
     """
     Permite al usuario seleccionar los pozos para el proceso de "pulling".
-    Ahora el usuario elige la cantidad de pulling mediante un slider.
+    El usuario elige la cantidad de pulling con un slider.
     """
     if "df_filtrado" not in data_store:
         flash("Debes filtrar las zonas primero.")
@@ -288,14 +288,14 @@ def select_pulling():
 
     df_filtrado = data_store["df_filtrado"]
     pozos_disponibles = data_store.get("pozos_disponibles", [])
-    
-    # Construir las opciones para el select de pozos
+
+    # Construimos las <option> para los pozos disponibles
     select_options = ""
     for pozo in pozos_disponibles:
         select_options += f'<option value="{pozo}">{pozo}</option>'
 
     if request.method == "POST":
-        # Obtener la cantidad de pulling seleccionada por el usuario
+        # Al hacer submit, se procesa la cantidad de pulling elegida
         pulling_count = int(request.form.get("pulling_count", 3))
         data_store["pulling_count"] = pulling_count
 
@@ -305,7 +305,7 @@ def select_pulling():
             pozo = request.form.get(f"pulling_pozo_{i}")
             pulling_data[f"Pulling {i}"] = {
                 "pozo": pozo,
-                "tiempo_restante": 0.0  # No se utiliza en este flujo
+                "tiempo_restante": 0.0  # Se puede ignorar o usar en tu lógica
             }
             seleccionados.append(pozo)
 
@@ -314,41 +314,60 @@ def select_pulling():
             return redirect(request.url)
 
         data_store["pulling_data"] = pulling_data
-        # Actualizar la lista de pozos disponibles quitando los seleccionados
+        # Quitar de la lista de pozos los que fueron seleccionados
         todos_pozos = sorted(df_filtrado["POZO"].unique().tolist())
         data_store["pozos_disponibles"] = sorted([p for p in todos_pozos if p not in seleccionados])
         flash("Selección de Pulling confirmada.")
         return redirect(url_for("assign"))
-    else:
-        pulling_count = 3  # Valor por defecto para el GET
 
+    else:
+        # Valor por defecto cuando se accede por GET
+        pulling_count = 3
+
+    # ---------------------------------------------------------------------
+    # Generamos el HTML dinámico (slider + selects) para insertarlo en la plantilla
+    # ---------------------------------------------------------------------
     form_html = f"""
+    <!-- Slider para elegir la cantidad de Pulling -->
     <div class="mb-3">
         <label for="pulling_count" class="form-label">Cantidad de Pulling:</label>
-        <input type="range" class="form-range" min="1" max="10" value="{pulling_count}" id="pulling_count_slider" name="pulling_count" oninput="updateSliderValue(this.value)">
+        <input type="range" class="form-range" min="1" max="10" value="{pulling_count}"
+               id="pulling_count_slider" name="pulling_count"
+               oninput="updateSliderValue(this.value)">
         <span id="slider_value">{pulling_count}</span>
     </div>
+
+    <!-- Contenedor donde se generarán los selects de forma dinámica -->
     <div id="pulling_selects">
     """
-    # Generar inicialmente los selects según el valor por defecto
+
+    # Generar inicialmente los selects (cuando la página se carga en GET)
     for i in range(1, pulling_count + 1):
         form_html += f"""
-            <h3>Pulling {i}</h3>
-            <label>Pozo para Pulling {i}:</label>
-            <select name="pulling_pozo_{i}" class="form-select w-50">
-                {select_options}
-            </select><br>
-            <hr>
+        <h3>Pulling {i}</h3>
+        <label>Pozo para Pulling {i}:</label>
+        <select name="pulling_pozo_{i}" class="form-select w-50">
+            {select_options}
+        </select><br><hr>
         """
     form_html += "</div>"
-    
-    # Incluir JavaScript para actualizar dinámicamente el formulario
+
+    # ---------------------------------------------------------------------
+    # JavaScript para actualizar los selects sin recargar la página
+    # ---------------------------------------------------------------------
+    # Notar las llaves dobles en ${{{{...}}}} para que Python no interprete 'document...' 
+    # como una variable, sino que lo imprima literalmente en el HTML.
     form_html += f"""
     <script>
       function updateSliderValue(value) {{
+        // Mostrar el número actual del slider
         document.getElementById("slider_value").innerText = value;
+
+        // Seleccionar el contenedor de los selects
         let pullingSelectsDiv = document.getElementById("pulling_selects");
         let newHtml = "";
+
+        // Generar 'value' bloques de selects
         for (let i = 1; i <= value; i++) {{
             newHtml += `<h3>Pulling ${{i}}</h3>
                         <label>Pozo para Pulling ${{i}}:</label>
@@ -356,11 +375,17 @@ def select_pulling():
                             ${{{{document.getElementById("hidden_options").innerHTML}}}}
                         </select><br><hr>`;
         }}
+        // Inyectar el HTML generado
         pullingSelectsDiv.innerHTML = newHtml;
       }}
     </script>
+
+    <!-- En este div oculto guardamos las <option> de los pozos para reusarlas -->
     <div id="hidden_options" style="display:none;">{select_options}</div>
     """
+
+    # Devolvemos la plantilla, inyectando form_html
+    return render_template("select_pulling.html", form_html=form_html)
 
     return render_template("select_pulling.html", form_html=form_html)
 
