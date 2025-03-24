@@ -244,9 +244,6 @@ def upload_file():
 
 @app.route("/filter", methods=["GET", "POST"])
 def filter_zonas():
-    """
-    Filtra las zonas disponibles (columna ZONA) para que el usuario seleccione.
-    """
     if "df" not in data_store:
         flash("Debes subir un archivo Excel primero.")
         return redirect(url_for("upload_file"))
@@ -255,20 +252,32 @@ def filter_zonas():
     zonas_disponibles = sorted(df["ZONA"].unique().tolist())
 
     if request.method == "POST":
+        # 1. Leer las zonas seleccionadas
         zonas_seleccionadas = request.form.getlist("zonas")
         if not zonas_seleccionadas:
             flash("Debes seleccionar al menos una zona.")
             return redirect(request.url)
 
+        # 2. Leer la cantidad de pulling
+        pulling_count = request.form.get("pulling_count", "3")
+        try:
+            pulling_count = int(pulling_count)
+        except ValueError:
+            pulling_count = 3
+
+        # 3. Filtrar el DataFrame según las zonas
         df_filtrado = df[df["ZONA"].isin(zonas_seleccionadas)].copy()
         data_store["df_filtrado"] = df_filtrado
+
+        # 4. Guardar los pozos disponibles y la cantidad de pulling
         pozos = sorted(df_filtrado["POZO"].unique().tolist())
         data_store["pozos_disponibles"] = pozos
+        data_store["pulling_count"] = pulling_count
 
-        flash(f"Zonas seleccionadas: {', '.join(zonas_seleccionadas)}")
+        flash(f"Zonas seleccionadas: {', '.join(zonas_seleccionadas)} | Pullings: {pulling_count}")
         return redirect(url_for("select_pulling"))
 
-    # Generar formulario de checkboxes para las zonas
+    # Si es GET, construimos el HTML para checkboxes
     checkbox_html = ""
     for zona in zonas_disponibles:
         checkbox_html += f'<input type="checkbox" name="zonas" value="{zona}"> {zona}<br>'
@@ -279,8 +288,8 @@ def filter_zonas():
 @app.route("/select_pulling", methods=["GET", "POST"])
 def select_pulling():
     """
-    Permite al usuario seleccionar los pozos para el proceso de "pulling".
-    El usuario elige la cantidad de pulling con un slider.
+    Muestra un formulario con 'pulling_count' selects.
+    El usuario elige el pozo para cada pulling.
     """
     if "df_filtrado" not in data_store:
         flash("Debes filtrar las zonas primero.")
@@ -288,157 +297,51 @@ def select_pulling():
 
     df_filtrado = data_store["df_filtrado"]
     pozos_disponibles = data_store.get("pozos_disponibles", [])
-
-    # Construimos las <option> para los pozos disponibles
-    select_options = ""
-    for pozo in pozos_disponibles:
-        select_options += f'<option value="{pozo}">{pozo}</option>'
+    pulling_count = data_store.get("pulling_count", 3)
 
     if request.method == "POST":
-        # Al hacer submit, se procesa la cantidad de pulling elegida
-        pulling_count = int(request.form.get("pulling_count", 3))
-        data_store["pulling_count"] = pulling_count
-
         pulling_data = {}
         seleccionados = []
         for i in range(1, pulling_count + 1):
             pozo = request.form.get(f"pulling_pozo_{i}")
             pulling_data[f"Pulling {i}"] = {
                 "pozo": pozo,
-                "tiempo_restante": 0.0  # Se puede ignorar o usar en tu lógica
+                "tiempo_restante": 0.0  # Lógica adicional si se requiere
             }
             seleccionados.append(pozo)
 
+        # Validar que no se repita el mismo pozo en más de un pulling
         if len(seleccionados) != len(set(seleccionados)):
             flash("Error: No puedes seleccionar el mismo pozo para más de un pulling.")
             return redirect(request.url)
 
         data_store["pulling_data"] = pulling_data
-        # Quitar de la lista de pozos los que fueron seleccionados
+
+        # Actualizar la lista de pozos disponibles quitando los seleccionados
         todos_pozos = sorted(df_filtrado["POZO"].unique().tolist())
-        data_store["pozos_disponibles"] = sorted([p for p in todos_pozos if p not in seleccionados])
+        data_store["pozos_disponibles"] = [p for p in todos_pozos if p not in seleccionados]
+
         flash("Selección de Pulling confirmada.")
         return redirect(url_for("assign"))
 
-    else:
-        # Valor por defecto cuando se accede por GET
-        pulling_count = 3
+    # Generar las <option> para cada pozo
+    select_options = ""
+    for pozo in pozos_disponibles:
+        select_options += f'<option value="{pozo}">{pozo}</option>'
 
-    # ---------------------------------------------------------------------
-    # Generamos el HTML dinámico (slider + selects) para insertarlo en la plantilla
-    # ---------------------------------------------------------------------
-    form_html = f"""
-    <!-- Slider para elegir la cantidad de Pulling -->
-    <div class="mb-3">
-        <label for="pulling_count" class="form-label">Cantidad de Pulling:</label>
-        <input type="range" class="form-range" min="1" max="10" value="{pulling_count}"
-               id="pulling_count_slider" name="pulling_count"
-               oninput="updateSliderValue(this.value)">
-        <span id="slider_value">{pulling_count}</span>
-    </div>
-
-    <!-- Contenedor donde se generarán los selects de forma dinámica -->
-    <div id="pulling_selects">
-    """
-
-    # Generar inicialmente los selects (cuando la página se carga en GET)
+    # Generar el formulario de selects según 'pulling_count'
+    form_html = ""
     for i in range(1, pulling_count + 1):
         form_html += f"""
-        <h3>Pulling {i}</h3>
+        <h4>Pulling {i}</h4>
         <label>Pozo para Pulling {i}:</label>
         <select name="pulling_pozo_{i}" class="form-select w-50">
-            {select_options}
-        </select><br><hr>
+          {select_options}
+        </select>
+        <hr>
         """
-    form_html += "</div>"
-
-    # ---------------------------------------------------------------------
-    # JavaScript para actualizar los selects sin recargar la página
-    # ---------------------------------------------------------------------
-    # Notar las llaves dobles en ${{{{...}}}} para que Python no interprete 'document...' 
-    # como una variable, sino que lo imprima literalmente en el HTML.
-    form_html += f"""
-    <script>
-      function updateSliderValue(value) {{
-        // Mostrar el número actual del slider
-        document.getElementById("slider_value").innerText = value;
-
-        // Seleccionar el contenedor de los selects
-        let pullingSelectsDiv = document.getElementById("pulling_selects");
-        let newHtml = "";
-
-        // Generar 'value' bloques de selects
-        for (let i = 1; i <= value; i++) {{
-            newHtml += `<h3>Pulling ${{i}}</h3>
-                        <label>Pozo para Pulling ${{i}}:</label>
-                        <select name="pulling_pozo_${{i}}" class="form-select w-50">
-                            ${{{{document.getElementById("hidden_options").innerHTML}}}}
-                        </select><br><hr>`;
-        }}
-        // Inyectar el HTML generado
-        pullingSelectsDiv.innerHTML = newHtml;
-      }}
-    </script>
-
-    <!-- En este div oculto guardamos las <option> de los pozos para reusarlas -->
-    <div id="hidden_options" style="display:none;">{select_options}</div>
-    """
-
-    # Devolvemos la plantilla, inyectando form_html
-    return render_template("select_pulling.html", form_html=form_html)
 
     return render_template("select_pulling.html", form_html=form_html)
-
-@app.route("/assign", methods=["GET"])
-def assign():
-    """
-    Realiza la asignación de pozos para cada pulling usando un cálculo de coeficiente
-    que toma en cuenta la NETA, el TIEMPO PLANIFICADO y la distancia entre pozos.
-    Se elimina la lógica de disponibilidad de HS.
-    """
-    if "pulling_data" not in data_store:
-        flash("Debes seleccionar los pozos para pulling primero.")
-        return redirect(url_for("select_pulling"))
-
-    df = data_store["df"]
-    pulling_data = data_store["pulling_data"]
-
-    matriz_prioridad = []
-    pozos_ocupados = set()
-    pulling_lista = list(pulling_data.items())
-
-    def calcular_coeficiente(pozo_referencia, pozo_candidato):
-        registro_ref = df[df["POZO"] == pozo_referencia].iloc[0]
-        registro_cand = df[df["POZO"] == pozo_candidato].iloc[0]
-        distancia = geodesic(
-            (registro_ref["GEO_LATITUDE"], registro_ref["GEO_LONGITUDE"]),
-            (registro_cand["GEO_LATITUDE"], registro_cand["GEO_LONGITUDE"])
-        ).kilometers
-        neta = registro_cand["NETA [M3/D]"]
-        tiempo_plan = registro_cand["TIEMPO PLANIFICADO"]
-        coeficiente = neta / (tiempo_plan + (distancia * 0.5)) if (tiempo_plan + (distancia * 0.5)) != 0 else 0
-        return coeficiente, distancia
-
-    def asignar_pozos(pulling_asignaciones, nivel):
-        no_asignados = [p for p in data_store["pozos_disponibles"] if p not in pozos_ocupados]
-        for pulling, data in pulling_lista:
-            # Se usa el pozo inicial o el último asignado como referencia
-            pozo_referencia = pulling_asignaciones[pulling][-1][0] if pulling_asignaciones[pulling] else data["pozo"]
-            candidatos = []
-            for pozo in no_asignados:
-                coef, dist = calcular_coeficiente(pozo_referencia, pozo)
-                candidatos.append((pozo, coef, dist))
-            # Ordena candidatos: mayor coeficiente y menor distancia
-            candidatos.sort(key=lambda x: (-x[1], x[2]))
-            if candidatos:
-                mejor_candidato = candidatos[0]
-                pulling_asignaciones[pulling].append(mejor_candidato)
-                pozos_ocupados.add(mejor_candidato[0])
-                if mejor_candidato[0] in no_asignados:
-                    no_asignados.remove(mejor_candidato[0])
-            else:
-                flash(f"⚠️ No hay pozos disponibles para asignar como {nivel} en {pulling}.")
-        return pulling_asignaciones
 
     # Inicializar asignaciones para cada pulling
     pulling_asignaciones = {pulling: [] for pulling, _ in pulling_lista}
