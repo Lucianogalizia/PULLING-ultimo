@@ -1,42 +1,29 @@
-<!-- templates/select_pulling.html -->
 <!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Seleccionar Pulling - MiApp</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <title>Seleccionar Pulling</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
 </head>
-<body>
-  <div class="container mt-5">
-    <h2 class="text-center mb-4">Selecciona Pozos para Pulling</h2>
-    
-    {% with messages = get_flashed_messages() %}
-      {% if messages %}
-        <div class="alert alert-warning">
-          {% for message in messages %}
-            <p>{{ message }}</p>
-          {% endfor %}
-        </div>
-      {% endif %}
-    {% endwith %}
+<body class="p-4">
+  <h2>Selecciona Pozos para Pulling</h2>
 
-    <!-- El formulario que envía la selección final al POST -->
-    <form action="{{ url_for('select_pulling') }}" method="post">
-      <div class="row">
-        <div class="col-md-8 offset-md-2">
-          <!-- Aquí se inyecta el bloque dinámico con el slider y los selects -->
-          {{ form_html|safe }}
-
-          <div class="text-center mt-3">
-            <button type="submit" class="btn btn-primary">Confirmar Pulling</button>
-          </div>
-        </div>
+  {% with messages = get_flashed_messages() %}
+    {% if messages %}
+      <div class="alert alert-warning">
+        {% for message in messages %}
+          <p>{{ message }}</p>
+        {% endfor %}
       </div>
-    </form>
-  </div>
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    {% endif %}
+  {% endwith %}
+
+  <form action="{{ url_for('select_pulling') }}" method="POST">
+    {{ form_html|safe }}
+    <button type="submit" class="btn btn-primary">Confirmar Pulling</button>
+  </form>
 </body>
 </html>
+
 
 
