@@ -207,15 +207,10 @@ def process_excel(file_path):
 # =============================================================================
 @app.route("/")
 def index():
-    """Redirige a la página de carga del Excel."""
     return redirect(url_for("upload_file"))
 
 @app.route("/upload", methods=["GET", "POST"])
 def upload_file():
-    """
-    Página para subir el archivo Excel.
-    Guarda el archivo, lo procesa y muestra un preview (20 primeras filas).
-    """
     if request.method == "POST":
         if "excel_file" not in request.files:
             flash("No se encontró el archivo en la solicitud.")
@@ -234,7 +229,6 @@ def upload_file():
             flash(f"Error al procesar el Excel: {e}")
             return redirect(request.url)
 
-        # Guardar el DataFrame procesado en data_store para uso posterior
         data_store["df"] = df_clean
         flash("Archivo procesado exitosamente. A continuación se muestra un preview (20 filas).")
         preview_html = preview_df.to_html(classes="table table-striped", index=False)
@@ -252,24 +246,20 @@ def filter_zonas():
     zonas_disponibles = sorted(df["ZONA"].unique().tolist())
 
     if request.method == "POST":
-        # 1. Leer las zonas seleccionadas
         zonas_seleccionadas = request.form.getlist("zonas")
         if not zonas_seleccionadas:
             flash("Debes seleccionar al menos una zona.")
             return redirect(request.url)
 
-        # 2. Leer la cantidad de pulling
         pulling_count = request.form.get("pulling_count", "3")
         try:
             pulling_count = int(pulling_count)
         except ValueError:
             pulling_count = 3
 
-        # 3. Filtrar el DataFrame según las zonas
         df_filtrado = df[df["ZONA"].isin(zonas_seleccionadas)].copy()
         data_store["df_filtrado"] = df_filtrado
 
-        # 4. Guardar los pozos disponibles y la cantidad de pulling
         pozos = sorted(df_filtrado["POZO"].unique().tolist())
         data_store["pozos_disponibles"] = pozos
         data_store["pulling_count"] = pulling_count
@@ -277,20 +267,14 @@ def filter_zonas():
         flash(f"Zonas seleccionadas: {', '.join(zonas_seleccionadas)} | Pullings: {pulling_count}")
         return redirect(url_for("select_pulling"))
 
-    # Si es GET, construimos el HTML para checkboxes
     checkbox_html = ""
     for zona in zonas_disponibles:
         checkbox_html += f'<input type="checkbox" name="zonas" value="{zona}"> {zona}<br>'
 
     return render_template("filter_zonas.html", checkbox_html=checkbox_html)
 
-
 @app.route("/select_pulling", methods=["GET", "POST"])
 def select_pulling():
-    """
-    Muestra un formulario con 'pulling_count' selects.
-    El usuario elige el pozo para cada pulling.
-    """
     if "df_filtrado" not in data_store:
         flash("Debes filtrar las zonas primero.")
         return redirect(url_for("filter_zonas"))
@@ -306,30 +290,27 @@ def select_pulling():
             pozo = request.form.get(f"pulling_pozo_{i}")
             pulling_data[f"Pulling {i}"] = {
                 "pozo": pozo,
-                "tiempo_restante": 0.0  # Lógica adicional si se requiere
+                "tiempo_restante": 0.0
             }
             seleccionados.append(pozo)
 
-        # Validar que no se repita el mismo pozo en más de un pulling
         if len(seleccionados) != len(set(seleccionados)):
             flash("Error: No puedes seleccionar el mismo pozo para más de un pulling.")
             return redirect(request.url)
 
         data_store["pulling_data"] = pulling_data
 
-        # Actualizar la lista de pozos disponibles quitando los seleccionados
         todos_pozos = sorted(df_filtrado["POZO"].unique().tolist())
         data_store["pozos_disponibles"] = [p for p in todos_pozos if p not in seleccionados]
 
         flash("Selección de Pulling confirmada.")
+        # Redirigir a la ruta de asignación (asegúrate de que el endpoint esté definido)
         return redirect(url_for("assign"))
 
-    # Generar las <option> para cada pozo
     select_options = ""
     for pozo in pozos_disponibles:
         select_options += f'<option value="{pozo}">{pozo}</option>'
 
-    # Generar el formulario de selects según 'pulling_count'
     form_html = ""
     for i in range(1, pulling_count + 1):
         form_html += f"""
@@ -343,13 +324,57 @@ def select_pulling():
 
     return render_template("select_pulling.html", form_html=form_html)
 
-    # Inicializar asignaciones para cada pulling
+# Nueva ruta para la asignación
+@app.route("/assign", methods=["GET"])
+def assign():
+    if "pulling_data" not in data_store:
+        flash("Debes seleccionar los pozos para pulling primero.")
+        return redirect(url_for("select_pulling"))
+
+    df = data_store["df"]
+    pulling_data = data_store["pulling_data"]
+
+    # Aquí va tu lógica de asignación. Por ejemplo:
+    matriz_prioridad = []
+    pozos_ocupados = set()
+    pulling_lista = list(pulling_data.items())
+
+    def calcular_coeficiente(pozo_referencia, pozo_candidato):
+        registro_ref = df[df["POZO"] == pozo_referencia].iloc[0]
+        registro_cand = df[df["POZO"] == pozo_candidato].iloc[0]
+        distancia = geodesic(
+            (registro_ref["GEO_LATITUDE"], registro_ref["GEO_LONGITUDE"]),
+            (registro_cand["GEO_LATITUDE"], registro_cand["GEO_LONGITUDE"])
+        ).kilometers
+        neta = registro_cand["NETA [M3/D]"]
+        tiempo_plan = registro_cand["TIEMPO PLANIFICADO"]
+        coeficiente = neta / (tiempo_plan + (distancia * 0.5)) if (tiempo_plan + (distancia * 0.5)) != 0 else 0
+        return coeficiente, distancia
+
+    def asignar_pozos(pulling_asignaciones, nivel):
+        no_asignados = [p for p in data_store["pozos_disponibles"] if p not in pozos_ocupados]
+        for pulling, data in pulling_lista:
+            pozo_referencia = pulling_asignaciones[pulling][-1][0] if pulling_asignaciones[pulling] else data["pozo"]
+            candidatos = []
+            for pozo in no_asignados:
+                coef, dist = calcular_coeficiente(pozo_referencia, pozo)
+                candidatos.append((pozo, coef, dist))
+            candidatos.sort(key=lambda x: (-x[1], x[2]))
+            if candidatos:
+                mejor_candidato = candidatos[0]
+                pulling_asignaciones[pulling].append(mejor_candidato)
+                pozos_ocupados.add(mejor_candidato[0])
+                if mejor_candidato[0] in no_asignados:
+                    no_asignados.remove(mejor_candidato[0])
+            else:
+                flash(f"⚠️ No hay pozos disponibles para asignar como {nivel} en {pulling}.")
+        return pulling_asignaciones
+
     pulling_asignaciones = {pulling: [] for pulling, _ in pulling_lista}
     pulling_asignaciones = asignar_pozos(pulling_asignaciones, "N+1")
     pulling_asignaciones = asignar_pozos(pulling_asignaciones, "N+2")
     pulling_asignaciones = asignar_pozos(pulling_asignaciones, "N+3")
 
-    # Construir la matriz de prioridad para la asignación
     for pulling, data in pulling_lista:
         pozo_actual = data["pozo"]
         registro_actual = df[df["POZO"] == pozo_actual].iloc[0]
@@ -358,8 +383,6 @@ def select_pulling():
         seleccionados = pulling_asignaciones.get(pulling, [])[:3]
         while len(seleccionados) < 3:
             seleccionados.append(("N/A", 1, 1))
-
-        # Cálculo de coeficiente actual versus el candidato N+1
         coeficiente_actual = neta_actual / tiempo_restante if tiempo_restante > 0 else 0
         distancia_n1 = seleccionados[0][2]
         registro_n1 = df[df["POZO"] == seleccionados[0][0]]
@@ -401,7 +424,6 @@ def select_pulling():
     ]
     df_prioridad = pd.DataFrame(matriz_prioridad, columns=columns)
 
-    # Aplicar estilos a la tabla para resaltar la recomendación
     def highlight_reco(val):
         if "Abandonar" in val:
             return "color: red; font-weight: bold;"
@@ -426,8 +448,5 @@ def select_pulling():
     flash("Proceso de asignación completado.")
     return render_template("assign_result.html", table=table_html)
 
-# =============================================================================
-# Ejecución de la Aplicación
-# =============================================================================
 if __name__ == "__main__":
     app.run(debug=True)
