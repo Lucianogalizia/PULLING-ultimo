@@ -157,6 +157,10 @@ def process_excel(file_path):
     # Nos quedamos solo con las columnas necesarias
     df_coords = df_coords[["POZO", "GEO_LATITUDE", "GEO_LONGITUDE"]]
 
+    # Reemplazar comas por puntos y convertir a float
+    df_coords["GEO_LATITUDE"] = df_coords["GEO_LATITUDE"].astype(str).str.replace(",", ".").astype(float)
+    df_coords["GEO_LONGITUDE"] = df_coords["GEO_LONGITUDE"].astype(str).str.replace(",", ".").astype(float)
+    
     # Realizar el merge por la columna POZO (left join)
     df_merged = df_main.merge(df_coords, on="POZO", how="left")
 
