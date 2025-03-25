@@ -44,33 +44,21 @@ def normalize_text(text):
     text = re.sub(r'\s+', ' ', text)
     return text
 
-def convert_coord(coord):
-    """
-    Convierte la coordenada a número decimal.
-    Aquí se asume que la coordenada ya es un número o una cadena convertible.
-    """
-    try:
-        return float(coord)
-    except:
-        return np.nan
-
 def process_excel(file_path):
     """
-    Procesa el archivo Excel (o XLSM) en la hoja "dataset".
-    
-    Realiza las siguientes operaciones:
-      1. Normaliza los nombres de las columnas para reconocer diferencias en mayúsculas,
-         acentos y espacios.
-      2. Ordena de mayor a menor por "Pérdida [m3/d]" y crea un preview con las 20 primeras filas.
+    Procesa el archivo Excel subido (hoja "dataset") y realiza lo siguiente:
+      1. Normaliza los nombres de las columnas.
+      2. Ordena de mayor a menor por "Pérdida [m3/d]" y obtiene un preview (20 filas).
       3. Filtra las filas donde "Plan [Si/No]" sea 1.
-      4. Descarta las filas que tengan la celda "OBSERVACIONES" pintada de rojo.
-      5. Elimina filas en las que ciertas columnas críticas estén vacías, nulas o sean cero.
-      6. Elimina filas en las que la columna "EQUIPO" contenga palabras no deseadas.
-      7. Convierte las columnas X e Y a coordenadas decimales.
-      8. Se queda únicamente con las columnas requeridas y las renombra.
-      9. Agrega las columnas PROD_DT (fecha actual) y RUBRO (valor fijo).
+      4. Descarta filas en las que la celda "OBSERVACIONES" esté pintada de rojo.
+      5. Elimina filas con valores nulos, vacíos o 0 en columnas críticas.
+      6. Elimina filas cuyo valor en la columna "EQUIPO" contenga palabras no deseadas.
+      7. (En lugar de convertir X e Y) Lee un Excel de coordenadas y hace un merge por "POZO"
+         para obtener las columnas GEO_LATITUDE y GEO_LONGITUDE.
+      8. Si algún pozo no se encuentra en el Excel de coordenadas, se avisa al usuario.
+      9. Se conservan y renombran las columnas requeridas, y se agregan PROD_DT y RUBRO.
     """
-    # Abrir el workbook con openpyxl para poder leer formatos y estilos
+    # --- Leer el Excel principal (hoja "dataset") ---
     wb = load_workbook(file_path, data_only=True)
     if "dataset" not in wb.sheetnames:
         raise ValueError("La hoja 'dataset' no se encontró en el archivo.")
@@ -85,17 +73,16 @@ def process_excel(file_path):
         header.append(val)
         col_map[idx] = norm
 
-    # Identificar la columna "OBSERVACIONES" (puede variar la escritura)
+    # Identificar la columna "OBSERVACIONES" (buscando "observac")
     observaciones_idx = None
     for idx, col_name in col_map.items():
-        if "observac" in col_name:  # Busca "observaciones" o variantes
+        if "observac" in col_name:
             observaciones_idx = idx
             break
 
-    # Recopilar datos fila por fila, descartando las filas con "OBSERVACIONES" en rojo
+    # Recopilar filas (descartando las que tienen "OBSERVACIONES" en rojo)
     data = []
     for row in ws.iter_rows(min_row=2, values_only=False):
-        # Comprobar color de la celda de OBSERVACIONES (se ignoran si está en rojo)
         if observaciones_idx is not None:
             cell_obs = row[observaciones_idx]
             red_flag = False
@@ -103,20 +90,18 @@ def process_excel(file_path):
                 if str(cell_obs.font.color.rgb).upper() == "FFFF0000":
                     red_flag = True
             if red_flag:
-                continue  # Descarta la fila
-
-        # Construir un diccionario para la fila usando los encabezados originales
+                continue  # descartar fila
         row_data = {}
         for idx, cell in enumerate(row):
             key = header[idx]
             row_data[key] = cell.value
         data.append(row_data)
+    
+    # Crear DataFrame del Excel principal
+    df_main = pd.DataFrame(data)
 
-    # Crear el DataFrame
-    df = pd.DataFrame(data)
-
-    # Normalizar nombres de columna y mapear a nombres esperados
-    normalized_columns = {col: normalize_text(col) for col in df.columns}
+    # Normalizar nombres de columna y renombrar según lo esperado
+    normalized_columns = {col: normalize_text(col) for col in df_main.columns}
     expected = {
         "activo": "Activo",
         "pozo": "POZO",
@@ -136,71 +121,78 @@ def process_excel(file_path):
         "observaciones": "OBSERVACIONES"
     }
     rename_dict = {}
-    for col in df.columns:
+    for col in df_main.columns:
         norm = normalize_text(col)
         if norm in expected:
             rename_dict[col] = expected[norm]
-    df.rename(columns=rename_dict, inplace=True)
+    df_main.rename(columns=rename_dict, inplace=True)
 
-    # --- Operaciones de filtrado y ordenamiento ---
-    # Ordenar de mayor a menor por "Pérdida [m3/d]" y obtener preview de 20 filas
-    if "Pérdida [m3/d]" in df.columns:
-        # Convertir los valores a numérico; los valores que no se puedan convertir se vuelven NaN
-        df["Pérdida [m3/d]"] = pd.to_numeric(df["Pérdida [m3/d]"], errors="coerce")
-        df.sort_values(by="Pérdida [m3/d]", ascending=False, inplace=True)
-    preview_df = df.head(20)
+    # --- Operaciones de filtrado y preview ---
+    if "Pérdida [m3/d]" in df_main.columns:
+        df_main["Pérdida [m3/d]"] = pd.to_numeric(df_main["Pérdida [m3/d]"], errors="coerce")
+        df_main.sort_values(by="Pérdida [m3/d]", ascending=False, inplace=True)
+    preview_df = df_main.head(20)
 
-    # Filtrar filas donde "Plan [Si/No]" sea 1
-    if "Plan [Si/No]" in df.columns:
-        df = df[df["Plan [Si/No]"] == 1]
+    if "Plan [Si/No]" in df_main.columns:
+        df_main = df_main[df_main["Plan [Si/No]"] == 1]
 
-    # Eliminar filas con datos nulos, vacíos o 0 en columnas críticas
     cols_criticas = ["Activo", "POZO", "X", "Y", "Pérdida [m3/d]", "Plan [Si/No]", "Plan [Hs/INT]", "EQUIPO"]
     for col in cols_criticas:
-        if col in df.columns:
-            df = df[df[col].notnull()]
-            df = df[df[col] != 0]
+        if col in df_main.columns:
+            df_main = df_main[df_main[col].notnull()]
+            df_main = df_main[df_main[col] != 0]
 
-    # Eliminar filas con palabras no deseadas en la columna EQUIPO
-    if "EQUIPO" in df.columns:
+    if "EQUIPO" in df_main.columns:
         patrones = ["fb", "pesado", "z inyector", "z recupero"]
         def no_contiene(valor):
             if not isinstance(valor, str):
                 return True
             valor_norm = normalize_text(valor)
             return not any(pat in valor_norm for pat in patrones)
-        df = df[df["EQUIPO"].apply(no_contiene)]
+        df_main = df_main[df_main["EQUIPO"].apply(no_contiene)]
 
-    # Convertir las columnas X e Y a coordenadas decimales
-    if "X" in df.columns:
-        df["X"] = df["X"].apply(convert_coord)
-    if "Y" in df.columns:
-        df["Y"] = df["Y"].apply(convert_coord)
+    # --- Merge con el Excel de coordenadas ---
+    # Leer el Excel de coordenadas (asegúrate de que 'coordenadas.xlsx' esté en tu proyecto)
+    df_coords = pd.read_excel("coordenadas.xlsx")
+    # Nos quedamos solo con las columnas necesarias
+    df_coords = df_coords[["POZO", "GEO_LATITUDE", "GEO_LONGITUDE"]]
 
-    # Conservar únicamente las columnas requeridas
-    columnas_requeridas = ["Activo", "POZO", "X", "Y", "Pérdida [m3/d]", "Plan [Hs/INT]", "Batería"]
-    df = df[[col for col in columnas_requeridas if col in df.columns]]
+    # Realizar el merge por la columna POZO (left join)
+    df_merged = df_main.merge(df_coords, on="POZO", how="left")
 
-    # Renombrar columnas y agregar las columnas PROD_DT y RUBRO
-    df.rename(columns={
+    # Verificar si faltan coordenadas y avisar al usuario
+    missing_pozos = df_merged[
+        df_merged["GEO_LATITUDE"].isnull() | df_merged["GEO_LONGITUDE"].isnull()
+    ]["POZO"].unique()
+    if len(missing_pozos) > 0:
+        flash(
+            f"Atención: No se encontraron coordenadas para los siguientes pozos: {', '.join(missing_pozos)}"
+        )
+        # Opcional: eliminar filas sin coordenadas para evitar errores posteriores
+        df_merged = df_merged.dropna(subset=["GEO_LATITUDE", "GEO_LONGITUDE"])
+
+    # --- Selección y renombrado de columnas finales ---
+    # Conservamos las columnas que necesitamos del DataFrame fusionado
+    columnas_requeridas = ["Activo", "POZO", "Pérdida [m3/d]", "Plan [Hs/INT]", "Batería"]
+    df_merged = df_merged[[col for col in columnas_requeridas if col in df_merged.columns] + ["GEO_LATITUDE", "GEO_LONGITUDE"]]
+
+    # Renombrar columnas para el output final
+    df_merged.rename(columns={
         "Activo": "ZONA",
-        "X": "GEO_LATITUDE",
-        "Y": "GEO_LONGITUDE",
         "Pérdida [m3/d]": "NETA [M3/D]",
         "Plan [Hs/INT]": "TIEMPO PLANIFICADO",
         "Batería": "BATERÍA"
     }, inplace=True)
 
-    # Agregar la fecha de hoy y la columna fija "RUBRO"
-    df["PROD_DT"] = datetime.date.today().strftime("%Y-%m-%d")
-    df["RUBRO"] = "ESPERA DE TRACTOR"
+    # Agregar columnas fijas: fecha de producción y rubro
+    df_merged["PROD_DT"] = datetime.date.today().strftime("%Y-%m-%d")
+    df_merged["RUBRO"] = "ESPERA DE TRACTOR"
 
     # Reordenar columnas según lo solicitado
-    orden_final = ["POZO", "NETA [M3/D]", "PROD_DT", "RUBRO", 
-                   "GEO_LATITUDE", "GEO_LONGITUDE", "BATERÍA", "ZONA", "TIEMPO PLANIFICADO"]
-    df = df[[col for col in orden_final if col in df.columns]]
+    orden_final = ["POZO", "NETA [M3/D]", "PROD_DT", "RUBRO", "GEO_LATITUDE", "GEO_LONGITUDE", "BATERÍA", "ZONA", "TIEMPO PLANIFICADO"]
+    df_merged = df_merged[[col for col in orden_final if col in df_merged.columns]]
 
-    return df, preview_df
+    return df_merged, preview_df
 
 # =============================================================================
 # Rutas de la Aplicación Flask
