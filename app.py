@@ -420,12 +420,18 @@ def assign():
     df = data_store["df"]
     pulling_data = data_store["pulling_data"]
  
-    # Aquí va tu lógica de asignación. Por ejemplo:
-    matriz_prioridad = []
-    pozos_ocupados = set()
+    # Lista de tuplas (pulling_name, {"pozo": <>, "tiempo_restante": <>})
     pulling_lista = list(pulling_data.items())
+    pozos_ocupados = set()
  
+    # ----------------------
+    # 1. Funciones auxiliares
+    # ----------------------
     def calcular_coeficiente(pozo_referencia, pozo_candidato):
+        """
+        Calcula coeficiente = NETA / (TIEMPO_PLAN + 0.5*distancia)
+        Retorna (coeficiente, distancia).
+        """
         registro_ref = df[df["POZO"] == pozo_referencia].iloc[0]
         registro_cand = df[df["POZO"] == pozo_candidato].iloc[0]
         distancia = geodesic(
@@ -434,79 +440,150 @@ def assign():
         ).kilometers
         neta = registro_cand["NETA [M3/D]"]
         tiempo_plan = registro_cand["TIEMPO PLANIFICADO"]
-        coeficiente = neta / (tiempo_plan + (distancia * 0.5)) if (tiempo_plan + (distancia * 0.5)) != 0 else 0
+        denominador = (tiempo_plan + 0.5 * distancia)
+        coeficiente = neta / denominador if denominador != 0 else 0
         return coeficiente, distancia
  
     def asignar_pozos(pulling_asignaciones, nivel):
+        """
+        Asigna pozos para cada pulling según el nivel (N+1, N+2, N+3).
+        Toma los pozos no asignados y selecciona el "mejor candidato" según el coeficiente.
+        """
         no_asignados = [p for p in data_store["pozos_disponibles"] if p not in pozos_ocupados]
-        for pulling, data in pulling_lista:
-            pozo_referencia = pulling_asignaciones[pulling][-1][0] if pulling_asignaciones[pulling] else data["pozo"]
+        for pulling, pdata in pulling_lista:
+            # Si ya tiene asignados, usamos el último pozo; sino usamos el pozo original
+            pozo_referencia = pulling_asignaciones[pulling][-1][0] if pulling_asignaciones[pulling] else pdata["pozo"]
             candidatos = []
             for pozo in no_asignados:
                 coef, dist = calcular_coeficiente(pozo_referencia, pozo)
                 candidatos.append((pozo, coef, dist))
+            # Ordenar desc. por coef y asc. por distancia
             candidatos.sort(key=lambda x: (-x[1], x[2]))
+ 
             if candidatos:
                 mejor_candidato = candidatos[0]
                 pulling_asignaciones[pulling].append(mejor_candidato)
                 pozos_ocupados.add(mejor_candidato[0])
-                if mejor_candidato[0] in no_asignados:
-                    no_asignados.remove(mejor_candidato[0])
+                no_asignados.remove(mejor_candidato[0])
             else:
                 flash(f"⚠️ No hay pozos disponibles para asignar como {nivel} en {pulling}.")
         return pulling_asignaciones
  
+    # ----------------------
+    # 2. Asignaciones (N+1, N+2, N+3)
+    # ----------------------
     pulling_asignaciones = {pulling: [] for pulling, _ in pulling_lista}
     pulling_asignaciones = asignar_pozos(pulling_asignaciones, "N+1")
     pulling_asignaciones = asignar_pozos(pulling_asignaciones, "N+2")
     pulling_asignaciones = asignar_pozos(pulling_asignaciones, "N+3")
  
-    for pulling, data in pulling_lista:
-        pozo_actual = data["pozo"]
+    # ----------------------
+    # 3. Construcción de la Matriz de Prioridad
+    # ----------------------
+    matriz_prioridad = []
+ 
+    for pulling, pdata in pulling_lista:
+        pozo_actual = pdata["pozo"]
         registro_actual = df[df["POZO"] == pozo_actual].iloc[0]
         neta_actual = registro_actual["NETA [M3/D]"]
-        tiempo_restante = data["tiempo_restante"]
+        tiempo_restante = pdata["tiempo_restante"]
+ 
+        # Obtenemos hasta 3 pozos (N+1, N+2, N+3)
         seleccionados = pulling_asignaciones.get(pulling, [])[:3]
+        # Si no hay suficientes pozos, rellenamos con N/A
         while len(seleccionados) < 3:
             seleccionados.append(("N/A", 1, 1))
-        coeficiente_actual = neta_actual / tiempo_restante if tiempo_restante > 0 else 0
-        distancia_n1 = seleccionados[0][2]
-        registro_n1 = df[df["POZO"] == seleccionados[0][0]]
+ 
+        # Coeficiente del pozo actual
+        coeficiente_actual = 0
+        if tiempo_restante > 0:
+            coeficiente_actual = neta_actual / tiempo_restante
+ 
+        # ----------------------
+        # 3.1 Obtener info de N+1, N+2, N+3 (pozo, neta, coef, dist)
+        # ----------------------
+        # Función interna para buscar NETA en df
+        def get_neta(pozo):
+            if pozo == "N/A":
+                return 0
+            row = df[df["POZO"] == pozo]
+            if not row.empty:
+                return row["NETA [M3/D]"].iloc[0]
+            return 0
+ 
+        # N+1
+        pozo_n1, coef_n1, dist_n1 = seleccionados[0]
+        neta_n1 = get_neta(pozo_n1)
+        # Se usa para recomendación
+        registro_n1 = df[df["POZO"] == pozo_n1]
         if not registro_n1.empty:
             tiempo_planificado_n1 = registro_n1["TIEMPO PLANIFICADO"].iloc[0]
-            neta_n1 = registro_n1["NETA [M3/D]"].iloc[0]
         else:
             tiempo_planificado_n1 = 1
-            neta_n1 = 1
-        coeficiente_n1 = neta_n1 / ((0.5 * distancia_n1) + tiempo_planificado_n1)
+        # Coef N+1 para recomendación
+        denom_n1 = (0.5 * dist_n1) + tiempo_planificado_n1
+        coeficiente_n1 = neta_n1 / denom_n1 if denom_n1 != 0 else 0
  
+        # N+2
+        pozo_n2, coef_n2, dist_n2 = seleccionados[1]
+        neta_n2 = get_neta(pozo_n2)
+ 
+        # N+3
+        pozo_n3, coef_n3, dist_n3 = seleccionados[2]
+        neta_n3 = get_neta(pozo_n3)
+ 
+        # ----------------------
+        # 3.2 Generar Recomendación
+        # ----------------------
         if coeficiente_actual < coeficiente_n1:
             recomendacion = "Abandonar pozo actual y moverse al N+1"
         else:
             recomendacion = "Continuar en pozo actual"
  
+        # ----------------------
+        # 3.3 Agregar fila a la matriz
+        # ----------------------
         matriz_prioridad.append([
             pulling,
             pozo_actual,
             neta_actual,
             tiempo_restante,
-            seleccionados[0][0],
-            seleccionados[0][1],
-            seleccionados[0][2],
-            seleccionados[1][0],
-            seleccionados[1][1],
-            seleccionados[1][2],
-            seleccionados[2][0],
-            seleccionados[2][1],
-            seleccionados[2][2],
+            pozo_n1,
+            neta_n1,
+            coef_n1,
+            dist_n1,
+            pozo_n2,
+            neta_n2,
+            coef_n2,
+            dist_n2,
+            pozo_n3,
+            neta_n3,
+            coef_n3,
+            dist_n3,
             recomendacion
         ])
  
+    # ----------------------
+    # 4. Crear DataFrame con las nuevas columnas
+    # ----------------------
     columns = [
-        "Pulling", "Pozo Actual", "Neta Actual", "Tiempo Restante (h)",
-        "N+1", "Coeficiente N+1", "Distancia N+1 (km)",
-        "N+2", "Coeficiente N+2", "Distancia N+2 (km)",
-        "N+3", "Coeficiente N+3", "Distancia N+3 (km)", "Recomendación"
+        "Pulling",
+        "Pozo Actual",
+        "Neta Actual",
+        "Tiempo Restante (h)",
+        "N+1",
+        "Neta N+1",
+        "Coeficiente N+1",
+        "Distancia N+1 (km)",
+        "N+2",
+        "Neta N+2",
+        "Coeficiente N+2",
+        "Distancia N+2 (km)",
+        "N+3",
+        "Neta N+3",
+        "Coeficiente N+3",
+        "Distancia N+3 (km)",
+        "Recomendación"
     ]
     df_prioridad = pd.DataFrame(matriz_prioridad, columns=columns)
  
