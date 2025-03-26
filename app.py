@@ -246,29 +246,52 @@ def index():
  
 @app.route("/upload", methods=["GET", "POST"])
 def upload_file():
+    """
+    Ruta para subir y procesar el archivo Excel.
+    1. Valida que el archivo exista en la solicitud y tenga un nombre.
+    2. Guarda el archivo en la carpeta UPLOAD_FOLDER.
+    3. Llama a process_excel(filepath), que devuelve:
+       - df_clean: DataFrame final limpio.
+       - preview_df: DataFrame con preview (20 filas).
+       - pozos_celestes: Lista de pozos que están pintados de celeste.
+    4. Almacena df_clean y pozos_celestes en data_store para usarlos posteriormente.
+    5. Muestra un mensaje de éxito y un preview de las primeras 20 filas.
+    """
     if request.method == "POST":
+        # Verificar si se adjuntó el archivo
         if "excel_file" not in request.files:
             flash("No se encontró el archivo en la solicitud.")
             return redirect(request.url)
+
         file = request.files["excel_file"]
+        # Verificar si el nombre del archivo no está vacío
         if file.filename == "":
             flash("No se seleccionó ningún archivo.")
             return redirect(request.url)
+
+        # Guardar el archivo en la carpeta configurada
         filename = secure_filename(file.filename)
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
- 
+
+        # Procesar el Excel dentro de un bloque try-except
         try:
-            df_clean, preview_df = process_excel(filepath)
+            # Ahora process_excel devuelve 3 elementos
+            df_clean, preview_df, pozos_celestes = process_excel(filepath)
         except Exception as e:
             flash(f"Error al procesar el Excel: {e}")
             return redirect(request.url)
- 
+
+        # Almacenar los resultados en data_store (estado de sesión simulado)
         data_store["df"] = df_clean
+        data_store["celeste_pozos"] = pozos_celestes
+
+        # Notificar y renderizar la vista de éxito con un preview
         flash("Archivo procesado exitosamente. A continuación se muestra un preview (20 filas).")
         preview_html = preview_df.to_html(classes="table table-striped", index=False)
         return render_template("upload_success.html", preview=preview_html)
- 
+
+    # Si es GET, mostrar el formulario de subida
     return render_template("upload.html")
  
 @app.route("/filter", methods=["GET", "POST"])
@@ -313,12 +336,16 @@ def select_pulling():
     if "df_filtrado" not in data_store:
         flash("Debes filtrar las zonas primero.")
         return redirect(url_for("filter_zonas"))
- 
+
     df_filtrado = data_store["df_filtrado"]
-    pozos_disponibles = data_store.get("pozos_disponibles", [])
+    pozos_disponibles = sorted(df_filtrado["POZO"].unique().tolist())
     pulling_count = data_store.get("pulling_count", 3)
- 
+    
+    # Recuperamos la lista de pozos pintados de celeste
+    pozos_celestes = data_store.get("celeste_pozos", [])
+
     if request.method == "POST":
+        # Aquí se recogen los pozos seleccionados en el formulario
         pulling_data = {}
         seleccionados = []
         for i in range(1, pulling_count + 1):
@@ -328,26 +355,39 @@ def select_pulling():
                 "tiempo_restante": 0.0
             }
             seleccionados.append(pozo)
- 
+
+        # Validaciones, etc.
         if len(seleccionados) != len(set(seleccionados)):
             flash("Error: No puedes seleccionar el mismo pozo para más de un pulling.")
             return redirect(request.url)
- 
+
         data_store["pulling_data"] = pulling_data
- 
+
+        # Quitamos los pozos seleccionados de la lista total
         todos_pozos = sorted(df_filtrado["POZO"].unique().tolist())
         data_store["pozos_disponibles"] = [p for p in todos_pozos if p not in seleccionados]
- 
+
         flash("Selección de Pulling confirmada.")
-        # Redirigir a la ruta de asignación (asegúrate de que el endpoint esté definido)
         return redirect(url_for("assign"))
- 
-    select_options = ""
-    for pozo in pozos_disponibles:
-        select_options += f'<option value="{pozo}">{pozo}</option>'
- 
+
+    # Construimos el formulario en HTML dinámicamente,
+    # usando la lista de pozos disponibles y pre-seleccionando los celestes.
     form_html = ""
     for i in range(1, pulling_count + 1):
+        # Determinamos cuál pozo celeste (si existe) le toca a este Pulling
+        # i.e., si i=1 -> pozos_celestes[0], i=2 -> pozos_celestes[1], etc.
+        default_pozo = None
+        if (i - 1) < len(pozos_celestes):
+            default_pozo = pozos_celestes[i - 1]
+
+        # Construimos las opciones del <select>
+        select_options = ""
+        for pozo in pozos_disponibles:
+            if pozo == default_pozo:
+                select_options += f'<option value="{pozo}" selected>{pozo}</option>'
+            else:
+                select_options += f'<option value="{pozo}">{pozo}</option>'
+
         form_html += f"""
         <h4>Pulling {i}</h4>
         <label>Pozo para Pulling {i}:</label>
@@ -356,7 +396,7 @@ def select_pulling():
         </select>
         <hr>
         """
- 
+
     return render_template("select_pulling.html", form_html=form_html)
  
 # Nueva ruta para la asignación
