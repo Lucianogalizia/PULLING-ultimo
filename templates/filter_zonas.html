@@ -4,36 +4,85 @@
   <meta charset="UTF-8">
   <title>Filtrar Zonas</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+  <style>
+    body {
+      background-color: #f8f9fa; /* Fondo suave */
+    }
+    .card {
+      max-width: 600px;
+      margin: 2rem auto; /* Centra la tarjeta */
+      border-radius: 0.5rem;
+      border: none; /* Quita el borde por defecto */
+    }
+    .card-body {
+      padding: 2rem;
+    }
+    .range-label {
+      font-weight: 600;
+    }
+    .output-value {
+      font-size: 1.2rem;
+      margin-left: 10px;
+      font-weight: 500;
+    }
+  </style>
 </head>
-<body class="p-4">
-  <h2>Filtrar Zonas y Cantidad de Pulling</h2>
+<body>
+  <div class="container">
+    <div class="card shadow-sm">
+      <div class="card-body">
+        <h2 class="text-center mb-4">Filtrar Zonas y Cantidad de Pulling</h2>
 
-  {% with messages = get_flashed_messages() %}
-    {% if messages %}
-      <div class="alert alert-info">
-        {% for message in messages %}
-          <p>{{ message }}</p>
-        {% endfor %}
+        {% with messages = get_flashed_messages() %}
+          {% if messages %}
+            <div class="alert alert-info">
+              {% for message in messages %}
+                <p>{{ message }}</p>
+              {% endfor %}
+            </div>
+          {% endif %}
+        {% endwith %}
+
+        <form method="POST">
+          <!-- Zonas disponibles (checkboxes generados dinámicamente) -->
+          <div class="mb-3">
+            <label class="fw-bold">Zonas disponibles:</label><br>
+            {{ checkbox_html|safe }}
+          </div>
+
+          <!-- Slider para Cantidad de Pulling -->
+          <div class="mb-3">
+            <label for="pulling_count_slider" class="fw-bold range-label">Cantidad de Pulling:</label>
+            <input 
+              type="range"
+              class="form-range"
+              min="1"
+              max="10"
+              value="3"
+              id="pulling_count_slider"
+              name="pulling_count"
+              oninput="pullingOutput.value = pulling_count_slider.value"
+            >
+            <div class="text-center">
+              <output id="pullingOutput" class="output-value">3</output>
+            </div>
+          </div>
+
+          <button type="submit" class="btn btn-primary w-100">Filtrar Zonas</button>
+        </form>
       </div>
-    {% endif %}
-  {% endwith %}
-
-  <form method="POST">
-    <div class="mb-3">
-      <label><strong>Zonas disponibles:</strong></label><br>
-      {{ checkbox_html|safe }}
     </div>
+  </div>
 
-    <div class="mb-3">
-      <label><strong>Cantidad de Pulling:</strong></label><br>
-      <input type="range" min="1" max="10" value="3"
-             id="pulling_count_slider" name="pulling_count"
-             oninput="this.nextElementSibling.value = this.value">
-      <output>3</output>
-    </div>
-
-    <button type="submit" class="btn btn-primary">Filtrar Zonas</button>
-  </form>
+  <script>
+    // Sincroniza el valor del slider con el output al cargar la página
+    document.addEventListener('DOMContentLoaded', () => {
+      const slider = document.getElementById('pulling_count_slider');
+      const output = document.getElementById('pullingOutput');
+      output.value = slider.value;
+    });
+  </script>
 </body>
 </html>
+
 
