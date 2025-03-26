@@ -24,25 +24,28 @@
   </style>
 </head>
 <body class="p-4">
-  <h2 class="text-center mb-4">Resultado de Asignación de Pozos</h2>
-  
-  {% with messages = get_flashed_messages() %}
-    {% if messages %}
-      <div class="alert alert-warning">
-        {% for message in messages %}
-          <p>{{ message }}</p>
-        {% endfor %}
-      </div>
-    {% endif %}
-  {% endwith %}
-  
-  <div class="table-responsive mb-4">
-    {{ table|safe }}
-  </div>
-  
-  <div class="text-center">
-    <a href="{{ url_for('index') }}" class="btn btn-secondary">Volver al Inicio</a>
+  <div class="container">
+    <h2 class="text-center mb-4">Resultado de Asignación de Pozos</h2>
+    
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        <div class="alert alert-warning mt-3">
+          {% for message in messages %}
+            <p>{{ message }}</p>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+    
+    <div class="table-responsive mb-4">
+      {{ table|safe }}
+    </div>
+    
+    <div class="text-center">
+      <a href="{{ url_for('index') }}" class="btn btn-secondary">Volver al Inicio</a>
+    </div>
   </div>
 </body>
 </html>
+
 
