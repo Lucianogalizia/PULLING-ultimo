@@ -387,7 +387,7 @@ def assign():
     pozos_ocupados = set()
     pulling_lista = list(pulling_data.items())
 
-    def normalizar_pozo(valor):
+def normalizar_pozo(valor):
     if isinstance(valor, str):
         return valor.strip().upper()
     return str(valor).strip().upper()
