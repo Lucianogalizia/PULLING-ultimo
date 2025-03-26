@@ -582,7 +582,7 @@ def assign():
         "N+3",
         "Neta N+3",
         "Coeficiente N+3",
-        "Distancia N+3 (km)",
+        "Distancia N+3 (km)"
         #"Recomendación"
     ]
     df_prioridad = pd.DataFrame(matriz_prioridad, columns=columns)
