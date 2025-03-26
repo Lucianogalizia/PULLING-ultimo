@@ -535,10 +535,10 @@ def assign():
         # ----------------------
         # 3.2 Generar Recomendación
         # ----------------------
-        if coeficiente_actual < coeficiente_n1:
-            recomendacion = "Abandonar pozo actual y moverse al N+1"
-        else:
-            recomendacion = "Continuar en pozo actual"
+        #if coeficiente_actual < coeficiente_n1:
+            #recomendacion = "Abandonar pozo actual y moverse al N+1"
+        #else:
+            #recomendacion = "Continuar en pozo actual"
  
         # ----------------------
         # 3.3 Agregar fila a la matriz
