@@ -278,7 +278,7 @@ def select_pulling():
     """
     # Intentamos leer el Excel externo de pozos
     try:
-        df_wells = pd.read_excel("PULLING-ultimo/coordenadas.xlsx")
+        df_wells = pd.read_excel("coordenadas.xlsx")
         pulling_wells = sorted(df_wells["POZO"].unique().tolist())
     except Exception as e:
         flash(f"Error al leer el archivo de pozos: {e}")
