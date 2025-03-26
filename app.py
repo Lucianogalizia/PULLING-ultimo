@@ -274,11 +274,17 @@ def select_pulling():
     """
     Permite al usuario seleccionar los pozos para pulling y
     especificar manualmente el valor de NETA para cada uno.
-    La lista de pozos se obtiene del Excel "PULLING-ultimo/coordenadas.xlsx".
     """
-    # Intentamos leer el Excel externo de pozos
     try:
         df_wells = pd.read_excel("coordenadas.xlsx")
+        
+        # Eliminar filas donde la columna POZO sea NaN
+        df_wells.dropna(subset=["POZO"], inplace=True)
+        
+        # Convertir todos los valores de la columna POZO a string
+        df_wells["POZO"] = df_wells["POZO"].astype(str)
+        
+        # Ahora sí, podemos ordenar la lista sin errores
         pulling_wells = sorted(df_wells["POZO"].unique().tolist())
     except Exception as e:
         flash(f"Error al leer el archivo de pozos: {e}")
