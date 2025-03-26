@@ -106,10 +106,10 @@ def process_excel(file_path):
 
     # Lista para guardar pozos que estén pintados de celeste
     pozos_celestes = []
-
+    
     data = []
     for row in ws.iter_rows(min_row=2, values_only=False):
-        # Filtro de celdas rojas en "OBSERVACIONES"
+        # Filtrar celdas rojas en "OBSERVACIONES"
         if observaciones_idx is not None:
             cell_obs = row[observaciones_idx]
             red_flag = False
@@ -117,19 +117,30 @@ def process_excel(file_path):
                 if str(cell_obs.font.color.rgb).upper() == "FFFF0000":
                     red_flag = True
             if red_flag:
-                continue  # descartar fila
-
+                continue  # descartar la fila y pasar a la siguiente
+    
         # --- DETECTAR POZOS CELESTES ---
         if pozo_idx is not None:
             cell_pozo = row[pozo_idx]
-            if cell_pozo.fill and cell_pozo.fill.fgColor and cell_pozo.fill.fgColor.rgb:
-                color_code = cell_pozo.fill.fgColor.rgb.upper()  # p.ej. 'FFCCE5FF'
-                # Ajusta este valor al color real de tu Excel
-                if color_code == "FFCCE5FF":  
-                    if cell_pozo.value:
-                        pozos_celestes.append(cell_pozo.value)
-
-        # Construir diccionario de la fila para luego hacer el DataFrame
+            # Verificamos que la celda tenga un color de relleno definido
+            if cell_pozo.fill and cell_pozo.fill.fgColor:
+                # Verificamos que el tipo de color sea 'rgb'
+                if cell_pozo.fill.fgColor.type == "rgb":
+                    color_code = cell_pozo.fill.fgColor.rgb  # Por ejemplo, 'FF00FFFF'
+                    # Confirmamos que sea una cadena antes de usar .upper()
+                    if color_code and isinstance(color_code, str):
+                        color_code = color_code.upper()
+                        # Ajusta este valor al color real que necesitas detectar
+                        if color_code == "FF00FFFF":
+                            # Si la celda tiene valor, lo agregamos a la lista de celestes
+                            if cell_pozo.value:
+                                pozos_celestes.append(cell_pozo.value)
+                else:
+                    # El color podría ser temático (theme) o indexado (indexed).
+                    # Puedes ignorarlo o manejarlo según tu lógica.
+                    pass
+    
+        # Construir diccionario de la fila para luego crear el DataFrame
         row_data = {}
         for idx, cell in enumerate(row):
             key = header[idx]
