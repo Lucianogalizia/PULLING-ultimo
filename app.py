@@ -271,53 +271,79 @@ def filter_zonas():
 
 @app.route("/select_pulling", methods=["GET", "POST"])
 def select_pulling():
-    if "df_filtrado" not in data_store:
-        flash("Debes filtrar las zonas primero.")
+    """
+    Permite al usuario seleccionar los pozos para pulling y
+    especificar manualmente el valor de NETA para cada uno.
+    La lista de pozos se obtiene del Excel "PULLING-ultimo/coordenadas.xlsx".
+    """
+    # Intentamos leer el Excel externo de pozos
+    try:
+        df_wells = pd.read_excel("PULLING-ultimo/coordenadas.xlsx")
+        pulling_wells = sorted(df_wells["POZO"].unique().tolist())
+    except Exception as e:
+        flash(f"Error al leer el archivo de pozos: {e}")
         return redirect(url_for("filter_zonas"))
-
-    df_filtrado = data_store["df_filtrado"]
-    pozos_disponibles = data_store.get("pozos_disponibles", [])
+    
+    # Se obtiene la cantidad de pullings elegida previamente (desde /filter)
     pulling_count = data_store.get("pulling_count", 3)
-
+    
     if request.method == "POST":
         pulling_data = {}
         seleccionados = []
         for i in range(1, pulling_count + 1):
+            # Obtener el pozo seleccionado
             pozo = request.form.get(f"pulling_pozo_{i}")
+            # Obtener el valor de NETA ingresado por el usuario
+            neta = request.form.get(f"neta_{i}")
+            if neta is None or neta.strip() == "":
+                flash(f"Debes ingresar un valor de NETA para Pulling {i}.")
+                return redirect(request.url)
+            try:
+                # Reemplaza comas por puntos y convierte a float
+                neta_val = float(neta.replace(",", "."))
+            except Exception as e:
+                flash(f"Valor de NETA inválido para Pulling {i}: {neta}")
+                return redirect(request.url)
+            
             pulling_data[f"Pulling {i}"] = {
                 "pozo": pozo,
-                "tiempo_restante": 0.0
+                "neta": neta_val
             }
             seleccionados.append(pozo)
-
+        
+        # Validar que no se repita el mismo pozo en más de un pulling
         if len(seleccionados) != len(set(seleccionados)):
             flash("Error: No puedes seleccionar el mismo pozo para más de un pulling.")
             return redirect(request.url)
-
+        
         data_store["pulling_data"] = pulling_data
-
-        todos_pozos = sorted(df_filtrado["POZO"].unique().tolist())
-        data_store["pozos_disponibles"] = [p for p in todos_pozos if p not in seleccionados]
-
         flash("Selección de Pulling confirmada.")
-        # Redirigir a la ruta de asignación (asegúrate de que el endpoint esté definido)
         return redirect(url_for("assign"))
-
+    
+    # Para el método GET: generar el formulario de selección
+    # Construir las opciones para el dropdown a partir del Excel externo
     select_options = ""
-    for pozo in pozos_disponibles:
+    for pozo in pulling_wells:
         select_options += f'<option value="{pozo}">{pozo}</option>'
-
+    
+    # Generar el HTML para cada bloque de pulling (dropdown y input para NETA)
     form_html = ""
     for i in range(1, pulling_count + 1):
         form_html += f"""
         <h4>Pulling {i}</h4>
-        <label>Pozo para Pulling {i}:</label>
-        <select name="pulling_pozo_{i}" class="form-select w-50">
-          {select_options}
-        </select>
+        <div class="mb-2">
+          <label>Pozo para Pulling {i}:</label>
+          <select name="pulling_pozo_{i}" class="form-select w-50">
+            {select_options}
+          </select>
+        </div>
+        <div class="mb-2">
+          <label>NETA para Pulling {i}:</label>
+          <input type="number" name="neta_{i}" class="form-control w-50" step="0.01" required>
+        </div>
         <hr>
         """
-
+    
     return render_template("select_pulling.html", form_html=form_html)
 
 # Nueva ruta para la asignación
