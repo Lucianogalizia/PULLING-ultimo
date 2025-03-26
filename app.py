@@ -559,7 +559,7 @@ def assign():
             pozo_n3,
             neta_n3,
             coef_n3,
-            dist_n3,
+            dist_n3
             #recomendacion
         ])
  
@@ -605,8 +605,8 @@ def assign():
                      {"selector": "td", "props": [("padding", "8px")]},
                      {"selector": "tbody tr:nth-child(even)", "props": [("background-color", "#f2f2f2")]}
                  ])
-                 #.applymap(highlight_reco, subset=["Recomendación"]))
-    
+                 #.applymap(highlight_reco, subset=["Recomendación"])
+                )
     table_html = df_styled.render()
     flash("Proceso de asignación completado.")
     return render_template("assign_result.html", table=table_html)
