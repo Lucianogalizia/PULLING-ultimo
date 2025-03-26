@@ -87,7 +87,7 @@ def process_excel(file_path):
             cell_obs = row[observaciones_idx]
             red_flag = False
             if cell_obs.font and cell_obs.font.color and cell_obs.font.color.rgb:
-                if str(cell_obs.font.color.rgb).upper() == "FFFF0000":
+                if str(cell_obs.font.color.rgb).upper() == "FF00FFFF":
                     red_flag = True
             if red_flag:
                 continue  # descartar fila
