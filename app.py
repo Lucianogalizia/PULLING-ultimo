@@ -272,11 +272,10 @@ def filter_zonas():
 @app.route("/select_pulling", methods=["GET", "POST"])
 def select_pulling():
     """
-    El usuario selecciona pozos (desde coordenadas.xlsx) e ingresa manualmente la NETA para cada pulling.
-    Luego se genera un DataFrame con las columnas requeridas y se concatena con el df principal (subido por el usuario).
+    Permite al usuario seleccionar los pozos para pulling y 
+    especificar manualmente el valor de NETA para cada uno.
+    La lista de pozos se obtiene del archivo 'coordenadas.xlsx'.
     """
-    pulling_count = data_store.get("pulling_count", 3)
-
     try:
         # 1. Leer el archivo coordenadas.xlsx
         df_wells = pd.read_excel("coordenadas.xlsx")
@@ -288,110 +287,89 @@ def select_pulling():
         df_wells["POZO"] = df_wells["POZO"].astype(str)
 
         # 4. Convertir columnas GEO_LATITUDE y GEO_LONGITUDE (si contienen comas) a float
-        df_wells["GEO_LATITUDE"] = (df_wells["GEO_LATITUDE"]
-                                    .astype(str)
-                                    .str.replace(",", ".")
-                                    .astype(float))
-        df_wells["GEO_LONGITUDE"] = (df_wells["GEO_LONGITUDE"]
-                                     .astype(str)
-                                     .str.replace(",", ".")
-                                     .astype(float))
+        df_wells["GEO_LATITUDE"] = (
+            df_wells["GEO_LATITUDE"]
+            .astype(str)
+            .str.replace(",", ".")
+            .astype(float)
+        )
+        df_wells["GEO_LONGITUDE"] = (
+            df_wells["GEO_LONGITUDE"]
+            .astype(str)
+            .str.replace(",", ".")
+            .astype(float)
+        )
         
         # 5. Obtener la lista de pozos ordenada
         wells_list = sorted(df_wells["POZO"].unique().tolist())
-
     except Exception as e:
         flash(f"Error al leer el archivo de pozos: {e}")
-        return redirect(url_for("filter_zonas"))
+        return redirect(url_for("index"))
+
+    # Obtener la cantidad de pullings (por defecto 3 si no está definido)
+    pulling_count = data_store.get("pulling_count", 3)
 
     if request.method == "POST":
-        pulling_rows = []
+        pulling_data = {}
         seleccionados = []
-
         for i in range(1, pulling_count + 1):
-            # Obtener el pozo seleccionado
-            pozo = request.form.get(f"pulling_pozo_{i}", "").strip()
-            # Obtener el valor de NETA ingresado por el usuario
-            neta_str = request.form.get(f"neta_{i}", "").strip()
+            pozo = request.form.get(f"pulling_pozo_{i}")
+            neta = request.form.get(f"neta_{i}", "").strip()
 
-            # Validaciones
+            # Validar que se haya seleccionado un pozo y se haya ingresado NETA
             if not pozo:
-                flash(f"Debes seleccionar un pozo para el Pulling {i}.")
+                flash(f"Debes seleccionar un pozo para Pulling {i}.")
                 return redirect(request.url)
-            if not neta_str:
-                flash(f"Debes ingresar un valor de NETA para el Pulling {i}.")
+            if not neta:
+                flash(f"Debes ingresar un valor de NETA para Pulling {i}.")
                 return redirect(request.url)
 
-            # Convertir la NETA a float, reemplazando comas por puntos
+            # Reemplazar comas por puntos y convertir a float
             try:
-                neta_val = float(neta_str.replace(",", "."))
+                neta_val = float(neta.replace(",", "."))
             except ValueError:
-                flash(f"Valor de NETA inválido: '{neta_str}' para Pulling {i}.")
+                flash(f"Valor de NETA inválido para Pulling {i}: '{neta}'")
                 return redirect(request.url)
 
+            pulling_data[f"Pulling {i}"] = {
+                "pozo": pozo,
+                "neta": neta_val
+            }
             seleccionados.append(pozo)
-
-            # Buscar las coordenadas en df_wells
-            row_well = df_wells[df_wells["POZO"] == pozo]
-            if row_well.empty:
-                flash(f"El pozo '{pozo}' no existe en coordenadas.xlsx.")
-                return redirect(request.url)
-
-            lat = row_well["GEO_LATITUDE"].iloc[0]
-            lon = row_well["GEO_LONGITUDE"].iloc[0]
-
-            # Construir el diccionario con las columnas requeridas
-            pulling_rows.append({
-                "POZO": pozo,
-                "NETA [M3/D]": neta_val,
-                "PROD_DT": datetime.date.today().strftime("%Y-%m-%d"),
-                "RUBRO": "ESPERA DE TRACTOR",  # Valor inventado
-                "GEO_LATITUDE": lat,
-                "GEO_LONGITUDE": lon,
-                "BATERÍA": "BATERIA_FAKE",    # Valor inventado
-                "ZONA": "ZONA_FAKE",          # Valor inventado
-                "TIEMPO PLANIFICADO": 0.0     # Valor inventado
-            })
 
         # Validar que no se repita el mismo pozo
         if len(seleccionados) != len(set(seleccionados)):
-            flash("Error: No puedes seleccionar el mismo pozo en más de un pulling.")
+            flash("Error: No puedes seleccionar el mismo pozo para más de un pulling.")
             return redirect(request.url)
 
-        # 6. Convertir pulling_rows en un DataFrame
-        df_pulling = pd.DataFrame(pulling_rows)
-
-        # 7. Combinar con el DataFrame original subido por el usuario (si existe)
-        df_main = data_store.get("df", pd.DataFrame())
-        df_combined = pd.concat([df_main, df_pulling], ignore_index=True)
-        data_store["df"] = df_combined
-
-        flash("Selección de Pulling confirmada y pozos agregados correctamente.")
+        # Guardar la info en data_store y redirigir a la lógica final
+        data_store["pulling_data"] = pulling_data
+        flash("Selección de Pulling confirmada.")
         return redirect(url_for("assign"))
 
-    # --- Método GET: Generar el formulario ---
-    select_options = ""
-    for well in wells_list:
-        select_options += f'<option value="{well}">{well}</option>'
-
+    # Si es GET, generar el formulario de selects y campo NETA
     form_html = ""
     for i in range(1, pulling_count + 1):
         form_html += f"""
         <h4>Pulling {i}</h4>
-        <div class="mb-3">
+        <div class="mb-2">
           <label>Pozo para Pulling {i}:</label>
           <select name="pulling_pozo_{i}" class="form-select w-50">
-            {select_options}
-          </select>
-        </div>
-        <div class="mb-3">
-          <label>NETA [M3/D] para Pulling {i}:</label>
-          <input type="text" name="neta_{i}" class="form-control w-50" placeholder="Ej: 120.5" required>
+        """
+        for pozo in wells_list:
+            form_html += f'<option value="{pozo}">{pozo}</option>'
+        form_html += "</select></div>"
+
+        form_html += f"""
+        <div class="mb-2">
+          <label>NETA (m3/d) para Pulling {i}:</label>
+          <input type="number" name="neta_{i}" class="form-control w-50" step="0.01" required>
         </div>
         <hr>
         """
 
     return render_template("select_pulling.html", form_html=form_html)
+
 
 
 # Nueva ruta para la asignación
