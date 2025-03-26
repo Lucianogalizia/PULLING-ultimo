@@ -388,16 +388,30 @@ def assign():
     pulling_lista = list(pulling_data.items())
 
     def calcular_coeficiente(pozo_referencia, pozo_candidato):
-        registro_ref = df[df["POZO"] == pozo_referencia].iloc[0]
-        registro_cand = df[df["POZO"] == pozo_candidato].iloc[0]
+        # Buscar registros para pozo_referencia y pozo_candidato
+        ref_rows = df[df["POZO"] == pozo_referencia]
+        cand_rows = df[df["POZO"] == pozo_candidato]
+        
+        # Verificar si se encontraron registros
+        if ref_rows.empty:
+            raise ValueError(f"No se encontró el pozo de referencia: {pozo_referencia}")
+        if cand_rows.empty:
+            raise ValueError(f"No se encontró el pozo candidato: {pozo_candidato}")
+        
+        registro_ref = ref_rows.iloc[0]
+        registro_cand = cand_rows.iloc[0]
+        
         distancia = geodesic(
             (registro_ref["GEO_LATITUDE"], registro_ref["GEO_LONGITUDE"]),
             (registro_cand["GEO_LATITUDE"], registro_cand["GEO_LONGITUDE"])
         ).kilometers
+        
         neta = registro_cand["NETA [M3/D]"]
         tiempo_plan = registro_cand["TIEMPO PLANIFICADO"]
+        
         coeficiente = neta / (tiempo_plan + (distancia * 0.5)) if (tiempo_plan + (distancia * 0.5)) != 0 else 0
         return coeficiente, distancia
+
 
     def asignar_pozos(pulling_asignaciones, nivel):
         no_asignados = [p for p in data_store["pozos_disponibles"] if p not in pozos_ocupados]
