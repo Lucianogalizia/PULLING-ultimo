@@ -560,7 +560,7 @@ def assign():
             neta_n3,
             coef_n3,
             dist_n3,
-            recomendacion
+            #recomendacion
         ])
  
     # ----------------------
@@ -583,7 +583,7 @@ def assign():
         "Neta N+3",
         "Coeficiente N+3",
         "Distancia N+3 (km)",
-        "Recomendación"
+        #"Recomendación"
     ]
     df_prioridad = pd.DataFrame(matriz_prioridad, columns=columns)
  
@@ -605,7 +605,7 @@ def assign():
                      {"selector": "td", "props": [("padding", "8px")]},
                      {"selector": "tbody tr:nth-child(even)", "props": [("background-color", "#f2f2f2")]}
                  ])
-                 .applymap(highlight_reco, subset=["Recomendación"]))
+                 #.applymap(highlight_reco, subset=["Recomendación"]))
     
     table_html = df_styled.render()
     flash("Proceso de asignación completado.")
