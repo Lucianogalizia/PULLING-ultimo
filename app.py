@@ -97,6 +97,45 @@ def process_excel(file_path):
             row_data[key] = cell.value
         data.append(row_data)
     
+    # --- DETECTAR EL ÍNDICE DE LA COLUMNA "POZO" PARA LEER EL COLOR ---
+    pozo_idx = None
+    for idx, col_name in col_map.items():
+        if "pozo" in col_name:
+            pozo_idx = idx
+            break
+
+    # Lista para guardar pozos que estén pintados de celeste
+    pozos_celestes = []
+
+    data = []
+    for row in ws.iter_rows(min_row=2, values_only=False):
+        # Filtro de celdas rojas en "OBSERVACIONES"
+        if observaciones_idx is not None:
+            cell_obs = row[observaciones_idx]
+            red_flag = False
+            if cell_obs.font and cell_obs.font.color and cell_obs.font.color.rgb:
+                if str(cell_obs.font.color.rgb).upper() == "FFFF0000":
+                    red_flag = True
+            if red_flag:
+                continue  # descartar fila
+
+        # --- DETECTAR POZOS CELESTES ---
+        if pozo_idx is not None:
+            cell_pozo = row[pozo_idx]
+            if cell_pozo.fill and cell_pozo.fill.fgColor and cell_pozo.fill.fgColor.rgb:
+                color_code = cell_pozo.fill.fgColor.rgb.upper()  # p.ej. 'FFCCE5FF'
+                # Ajusta este valor al color real de tu Excel
+                if color_code == "FFCCE5FF":  
+                    if cell_pozo.value:
+                        pozos_celestes.append(cell_pozo.value)
+
+        # Construir diccionario de la fila para luego hacer el DataFrame
+        row_data = {}
+        for idx, cell in enumerate(row):
+            key = header[idx]
+            row_data[key] = cell.value
+        data.append(row_data)
+ 
     # Crear DataFrame del Excel principal
     df_main = pd.DataFrame(data)
  
@@ -196,7 +235,7 @@ def process_excel(file_path):
     orden_final = ["POZO", "NETA [M3/D]", "PROD_DT", "RUBRO", "GEO_LATITUDE", "GEO_LONGITUDE", "BATERÍA", "ZONA", "TIEMPO PLANIFICADO"]
     df_merged = df_merged[[col for col in orden_final if col in df_merged.columns]]
  
-    return df_merged, preview_df
+    return df_merged, preview_df, pozos_celestes
  
 # =============================================================================
 # Rutas de la Aplicación Flask
