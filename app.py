@@ -80,17 +80,19 @@ def process_excel(file_path):
             observaciones_idx = idx
             break
  
-    # Recopilar filas (descartando las que tienen "OBSERVACIONES" en rojo)
+    # Recopilar filas descartando las filas cuya celda en "OBSERVACIONES" tenga un relleno rojo
     data = []
     for row in ws.iter_rows(min_row=2, values_only=False):
         if observaciones_idx is not None:
             cell_obs = row[observaciones_idx]
             red_flag = False
-            if cell_obs.font and cell_obs.font.color and cell_obs.font.color.rgb:
-                if str(cell_obs.font.color.rgb).upper() == "FF00FFFF":
-                    red_flag = True
+            # Verificamos el color de relleno (fill) de la celda, no el color de la fuente
+            if cell_obs.fill and cell_obs.fill.fgColor:
+                if cell_obs.fill.fgColor.type == "rgb" and cell_obs.fill.fgColor.rgb:
+                    if cell_obs.fill.fgColor.rgb.upper() == "FFFF0000":  # Código RGB para rojo
+                        red_flag = True
             if red_flag:
-                continue  # descartar fila
+                continue  # Descartar la fila si la celda está pintada de rojo
         row_data = {}
         for idx, cell in enumerate(row):
             key = header[idx]
