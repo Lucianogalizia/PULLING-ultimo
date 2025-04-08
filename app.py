@@ -612,3 +612,4 @@ def assign():
     return render_template("assign_result.html", table=table_html)
  
 if __name__ == "__main__":
+    app.run(debug=True)
