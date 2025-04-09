@@ -87,7 +87,7 @@ def process_excel(file_path):
         if "pozo" in col_name:
             pozo_idx = idx
         if "equipo" in col_name:
-            equipo_idx = i
+            equipo_idx = idx
     
  
  # Recorrer las filas (desde la fila 2) en una sola iteración
