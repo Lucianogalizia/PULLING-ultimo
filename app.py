@@ -50,7 +50,7 @@ def process_excel(file_path):
       1. Normaliza los nombres de las columnas.
       2. Ordena de mayor a menor por "Pérdida [m3/d]" y obtiene un preview (20 filas).
       3. Filtra las filas donde "Plan [Si/No]" sea 1.
-      4. Descarta filas en las que la celda "OBSERVACIONES" esté pintada de rojo.
+      4. Descarta filas en las que la celda "OBSERVACIONES" esté pintada de rojo (relleno rojo).
       5. Elimina filas con valores nulos, vacíos o 0 en columnas críticas.
       6. Elimina filas cuyo valor en la columna "EQUIPO" contenga palabras no deseadas.
       7. (En lugar de convertir X e Y) Lee un Excel de coordenadas y hace un merge por "POZO"
@@ -58,12 +58,16 @@ def process_excel(file_path):
       8. Si algún pozo no se encuentra en el Excel de coordenadas, se avisa al usuario.
       9. Se conservan y renombran las columnas requeridas, y se agregan PROD_DT y RUBRO.
     """
+    from openpyxl import load_workbook
+    import pandas as pd
+    import datetime
+
     # --- Leer el Excel principal (hoja "dataset") ---
     wb = load_workbook(file_path, data_only=True)
     if "dataset" not in wb.sheetnames:
         raise ValueError("La hoja 'dataset' no se encontró en el archivo.")
     ws = wb["dataset"]
- 
+
     # Extraer encabezados y normalizarlos
     header = []
     col_map = {}
@@ -72,91 +76,50 @@ def process_excel(file_path):
         norm = normalize_text(val)
         header.append(val)
         col_map[idx] = norm
- 
-    # Identificar la columna "OBSERVACIONES" (buscando "observac")
-    # Identificar la columna "OBSERVACIONES" (buscando "observac")
+
+    # Identificar los índices de las columnas "OBSERVACIONES" y "POZO" (buscando la subcadena)
     observaciones_idx = None
+    pozo_idx = None
     for idx, col_name in col_map.items():
         if "observac" in col_name:
             observaciones_idx = idx
-            break
-    
-    # Recopilar filas descartando las filas cuya celda en "OBSERVACIONES" tenga un relleno rojo
-    data = []
-    for row in ws.iter_rows(min_row=2, values_only=False):
-        if observaciones_idx is not None:
-            cell_obs = row[observaciones_idx]
-            red_flag = False
-            # Verificar el color de relleno (fill) de la celda, no el color de la fuente
-            if cell_obs.fill and cell_obs.fill.fgColor:
-                fg = cell_obs.fill.fgColor
-                # Descomenta las siguientes líneas para depurar:
-                # print(f"Celda {cell_obs.coordinate}: type={fg.type}, rgb={fg.rgb}, theme={fg.theme}, indexed={fg.indexed}, tint={fg.tint}")
-                if fg.type == "rgb" and fg.rgb:
-                    if fg.rgb.upper() == "FFFF0000":  # Código RGB para rojo
-                        red_flag = True
-                # Si fuese necesario, se pueden agregar otras condiciones para 'theme' o 'indexed'
-            if red_flag:
-                # Descomenta la siguiente línea para confirmar que se descarta la fila:
-                # print(f"Descartando fila {row[0].row} por fondo rojo en OBSERVACIONES.")
-                continue  # Descartar la fila si la celda tiene fondo rojo
-        # Crear el diccionario de la fila usando los encabezados
-        row_data = {header[idx]: cell.value for idx, cell in enumerate(row)}
-        data.append(row_data)
-    
-    # --- DETECTAR EL ÍNDICE DE LA COLUMNA "POZO" PARA LEER EL COLOR ---
-    pozo_idx = None
-    for idx, col_name in col_map.items():
         if "pozo" in col_name:
             pozo_idx = idx
-            break
 
-    # Lista para guardar pozos que estén pintados de celeste
-    pozos_celestes = []
-    
+    # Recorrer las filas (desde la fila 2) en una sola iteración
     data = []
+    pozos_celestes = []
     for row in ws.iter_rows(min_row=2, values_only=False):
-        # Filtrar celdas rojas en "OBSERVACIONES"
+        # Filtrar: descartar la fila si la celda en "OBSERVACIONES" tiene el **relleno rojo**
         if observaciones_idx is not None:
             cell_obs = row[observaciones_idx]
             red_flag = False
-            if cell_obs.font and cell_obs.font.color and cell_obs.font.color.rgb:
-                if str(cell_obs.font.color.rgb).upper() == "FFFF0000":
+            if cell_obs.fill and cell_obs.fill.fgColor:
+                fg = cell_obs.fill.fgColor
+                if fg.type == "rgb" and fg.rgb and fg.rgb.upper() == "FFFF0000":
                     red_flag = True
             if red_flag:
-                continue  # descartar la fila y pasar a la siguiente
-    
-        # --- DETECTAR POZOS CELESTES ---
+                # La fila se descarta por tener fondo rojo en OBSERVACIONES
+                continue
+
+        # Detectar pozos celestes: si la celda en la columna "POZO" tiene un relleno celeste,
+        # en este ejemplo se asume que el RGB para celeste es "FF00FFFF"
         if pozo_idx is not None:
             cell_pozo = row[pozo_idx]
-            # Verificamos que la celda tenga un color de relleno definido
             if cell_pozo.fill and cell_pozo.fill.fgColor:
-                # Verificamos que el tipo de color sea 'rgb'
-                if cell_pozo.fill.fgColor.type == "rgb":
-                    color_code = cell_pozo.fill.fgColor.rgb  # Por ejemplo, 'FF00FFFF'
-                    # Confirmamos que sea una cadena antes de usar .upper()
-                    if color_code and isinstance(color_code, str):
-                        color_code = color_code.upper()
-                        # Ajusta este valor al color real que necesitas detectar
-                        if color_code == "FF00FFFF":
-                            # Si la celda tiene valor, lo agregamos a la lista de celestes
-                            if cell_pozo.value:
-                                pozos_celestes.append(cell_pozo.value)
-                else:
-                    # El color podría ser temático (theme) o indexado (indexed).
-                    # Puedes ignorarlo o manejarlo según tu lógica.
-                    pass
-    
-        # Construir diccionario de la fila para luego crear el DataFrame
-        row_data = {}
-        for idx, cell in enumerate(row):
-            key = header[idx]
-            row_data[key] = cell.value
+                fg = cell_pozo.fill.fgColor
+                if fg.type == "rgb" and fg.rgb and fg.rgb.upper() == "FF00FFFF":
+                    if cell_pozo.value:
+                        pozos_celestes.append(cell_pozo.value)
+
+        # Si la fila pasó el filtro, se construye el diccionario usando los encabezados
+        row_data = {header[idx]: cell.value for idx, cell in enumerate(row)}
         data.append(row_data)
- 
-    # Crear DataFrame del Excel principal
+
+    # Crear DataFrame del Excel principal usando la lista filtrada "data"
     df_main = pd.DataFrame(data)
- 
+
+    # --- Continuar con el procesamiento normal ---
     # Normalizar nombres de columna y renombrar según lo esperado
     normalized_columns = {col: normalize_text(col) for col in df_main.columns}
     expected = {
@@ -183,22 +146,22 @@ def process_excel(file_path):
         if norm in expected:
             rename_dict[col] = expected[norm]
     df_main.rename(columns=rename_dict, inplace=True)
- 
+
     # --- Operaciones de filtrado y preview ---
     if "Pérdida [m3/d]" in df_main.columns:
         df_main["Pérdida [m3/d]"] = pd.to_numeric(df_main["Pérdida [m3/d]"], errors="coerce")
         df_main.sort_values(by="Pérdida [m3/d]", ascending=False, inplace=True)
     preview_df = df_main.head(20)
- 
+
     if "Plan [Si/No]" in df_main.columns:
         df_main = df_main[df_main["Plan [Si/No]"] == 1]
- 
+
     cols_criticas = ["Activo", "POZO", "X", "Y", "Pérdida [m3/d]", "Plan [Si/No]", "Plan [Hs/INT]", "EQUIPO"]
     for col in cols_criticas:
         if col in df_main.columns:
             df_main = df_main[df_main[col].notnull()]
             df_main = df_main[df_main[col] != 0]
- 
+
     if "EQUIPO" in df_main.columns:
         patrones = ["fb", "pesado", "z inyector", "z recupero"]
         def no_contiene(valor):
@@ -207,53 +170,39 @@ def process_excel(file_path):
             valor_norm = normalize_text(valor)
             return not any(pat in valor_norm for pat in patrones)
         df_main = df_main[df_main["EQUIPO"].apply(no_contiene)]
- 
+
     # --- Merge con el Excel de coordenadas ---
-    # Leer el Excel de coordenadas (asegúrate de que 'coordenadas.xlsx' esté en tu proyecto)
+    import pandas as pd
     df_coords = pd.read_excel("coordenadas.xlsx")
-    # Nos quedamos solo con las columnas necesarias
     df_coords = df_coords[["POZO", "GEO_LATITUDE", "GEO_LONGITUDE"]]
- 
-    # Reemplazar comas por puntos y convertir a float
     df_coords["GEO_LATITUDE"] = df_coords["GEO_LATITUDE"].astype(str).str.replace(",", ".").astype(float)
     df_coords["GEO_LONGITUDE"] = df_coords["GEO_LONGITUDE"].astype(str).str.replace(",", ".").astype(float)
-    
-    # Realizar el merge por la columna POZO (left join)
+
     df_merged = df_main.merge(df_coords, on="POZO", how="left")
- 
-    # Verificar si faltan coordenadas y avisar al usuario
     missing_pozos = df_merged[
         df_merged["GEO_LATITUDE"].isnull() | df_merged["GEO_LONGITUDE"].isnull()
     ]["POZO"].unique()
     if len(missing_pozos) > 0:
-        flash(
-            f"Atención: No se encontraron coordenadas para los siguientes pozos: {', '.join(missing_pozos)}"
-        )
-        # Opcional: eliminar filas sin coordenadas para evitar errores posteriores
+        flash(f"Atención: No se encontraron coordenadas para los siguientes pozos: {', '.join(missing_pozos)}")
         df_merged = df_merged.dropna(subset=["GEO_LATITUDE", "GEO_LONGITUDE"])
- 
-    # --- Selección y renombrado de columnas finales ---
-    # Conservamos las columnas que necesitamos del DataFrame fusionado
+
     columnas_requeridas = ["Activo", "POZO", "Pérdida [m3/d]", "Plan [Hs/INT]", "Batería"]
     df_merged = df_merged[[col for col in columnas_requeridas if col in df_merged.columns] + ["GEO_LATITUDE", "GEO_LONGITUDE"]]
- 
-    # Renombrar columnas para el output final
     df_merged.rename(columns={
         "Activo": "ZONA",
         "Pérdida [m3/d]": "NETA [M3/D]",
         "Plan [Hs/INT]": "TIEMPO PLANIFICADO",
         "Batería": "BATERÍA"
     }, inplace=True)
- 
-    # Agregar columnas fijas: fecha de producción y rubro
+
     df_merged["PROD_DT"] = datetime.date.today().strftime("%Y-%m-%d")
     df_merged["RUBRO"] = "ESPERA DE TRACTOR"
- 
-    # Reordenar columnas según lo solicitado
+
     orden_final = ["POZO", "NETA [M3/D]", "PROD_DT", "RUBRO", "GEO_LATITUDE", "GEO_LONGITUDE", "BATERÍA", "ZONA", "TIEMPO PLANIFICADO"]
     df_merged = df_merged[[col for col in orden_final if col in df_merged.columns]]
- 
+
     return df_merged, preview_df, pozos_celestes
+
  
 # =============================================================================
 # Rutas de la Aplicación Flask
