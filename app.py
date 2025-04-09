@@ -74,29 +74,34 @@ def process_excel(file_path):
         col_map[idx] = norm
  
     # Identificar la columna "OBSERVACIONES" (buscando "observac")
+    # Identificar la columna "OBSERVACIONES" (buscando "observac")
     observaciones_idx = None
     for idx, col_name in col_map.items():
         if "observac" in col_name:
             observaciones_idx = idx
             break
- 
+    
     # Recopilar filas descartando las filas cuya celda en "OBSERVACIONES" tenga un relleno rojo
     data = []
     for row in ws.iter_rows(min_row=2, values_only=False):
         if observaciones_idx is not None:
             cell_obs = row[observaciones_idx]
             red_flag = False
-            # Verificamos el color de relleno (fill) de la celda, no el color de la fuente
+            # Verificar el color de relleno (fill) de la celda, no el color de la fuente
             if cell_obs.fill and cell_obs.fill.fgColor:
-                if cell_obs.fill.fgColor.type == "rgb" and cell_obs.fill.fgColor.rgb:
-                    if cell_obs.fill.fgColor.rgb.upper() == "FFFF0000":  # Código RGB para rojo
+                fg = cell_obs.fill.fgColor
+                # Descomenta las siguientes líneas para depurar:
+                # print(f"Celda {cell_obs.coordinate}: type={fg.type}, rgb={fg.rgb}, theme={fg.theme}, indexed={fg.indexed}, tint={fg.tint}")
+                if fg.type == "rgb" and fg.rgb:
+                    if fg.rgb.upper() == "FFFF0000":  # Código RGB para rojo
                         red_flag = True
+                # Si fuese necesario, se pueden agregar otras condiciones para 'theme' o 'indexed'
             if red_flag:
-                continue  # Descartar la fila si la celda está pintada de rojo
-        row_data = {}
-        for idx, cell in enumerate(row):
-            key = header[idx]
-            row_data[key] = cell.value
+                # Descomenta la siguiente línea para confirmar que se descarta la fila:
+                # print(f"Descartando fila {row[0].row} por fondo rojo en OBSERVACIONES.")
+                continue  # Descartar la fila si la celda tiene fondo rojo
+        # Crear el diccionario de la fila usando los encabezados
+        row_data = {header[idx]: cell.value for idx, cell in enumerate(row)}
         data.append(row_data)
     
     # --- DETECTAR EL ÍNDICE DE LA COLUMNA "POZO" PARA LEER EL COLOR ---
