@@ -80,40 +80,52 @@ def process_excel(file_path):
     # Identificar los índices de las columnas "OBSERVACIONES" y "POZO" (buscando la subcadena)
     observaciones_idx = None
     pozo_idx = None
+    equipo_idx = None
     for idx, col_name in col_map.items():
         if "observac" in col_name:
             observaciones_idx = idx
         if "pozo" in col_name:
             pozo_idx = idx
-
-    # Recorrer las filas (desde la fila 2) en una sola iteración
+        if "equipo" in col_name:
+            equipo_idx = i
+    
+ 
+ # Recorrer las filas (desde la fila 2) en una sola iteración
     data = []
     pozos_celestes = []
     for row in ws.iter_rows(min_row=2, values_only=False):
-        # Filtrar: descartar la fila si la celda en "OBSERVACIONES" tiene el **relleno rojo**
+        # 1) Descartar si OBSERVACIONES está pintada de rojo
         if observaciones_idx is not None:
             cell_obs = row[observaciones_idx]
-            red_flag = False
             if cell_obs.fill and cell_obs.fill.fgColor:
-                fg = cell_obs.fill.fgColor
-                if fg.type == "rgb" and fg.rgb and fg.rgb.upper() == "FFFF0000":
-                    red_flag = True
-            if red_flag:
-                # La fila se descarta por tener fondo rojo en OBSERVACIONES
-                continue
+                fg_obs = cell_obs.fill.fgColor
+                if fg_obs.type == "rgb" and fg_obs.rgb and fg_obs.rgb.upper() == "FFFF0000":
+                    # Se descarta esta fila
+                    continue
 
-        # Detectar pozos celestes: si la celda en la columna "POZO" tiene un relleno celeste,
-        # en este ejemplo se asume que el RGB para celeste es "FF00FFFF"
+        # 2) Descartar si EQUIPO contiene "B2" o "B3"
+        if equipo_idx is not None:
+            cell_equipo = row[equipo_idx]
+            if cell_equipo.value:
+                valor_equipo = str(cell_equipo.value).lower()
+                # Si encuentras la subcadena "b2" o "b3" en el texto, descarta la fila
+                if "b2" in valor_equipo or "b3" in valor_equipo:
+                    continue
+
+        # 3) Detectar pozos pintados de celeste (relleno "FF00FFFF")
         if pozo_idx is not None:
             cell_pozo = row[pozo_idx]
             if cell_pozo.fill and cell_pozo.fill.fgColor:
-                fg = cell_pozo.fill.fgColor
-                if fg.type == "rgb" and fg.rgb and fg.rgb.upper() == "FF00FFFF":
+                fg_pozo = cell_pozo.fill.fgColor
+                if fg_pozo.type == "rgb" and fg_pozo.rgb and fg_pozo.rgb.upper() == "FF00FFFF":
                     if cell_pozo.value:
                         pozos_celestes.append(cell_pozo.value)
 
-        # Si la fila pasó el filtro, se construye el diccionario usando los encabezados
-        row_data = {header[idx]: cell.value for idx, cell in enumerate(row)}
+        # 4) Construir diccionario de la fila usando la fila de encabezados
+        row_data = {}
+        for i, cell in enumerate(row):
+            key = header[i]
+            row_data[key] = cell.value
         data.append(row_data)
 
     # Crear DataFrame del Excel principal usando la lista filtrada "data"
