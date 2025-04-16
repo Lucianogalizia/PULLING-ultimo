@@ -69,7 +69,7 @@ def process_excel(file_path):
     from difflib import SequenceMatcher
 
     # ---------------------------
-    # Funciones auxiliares
+    # Funciones Auxiliares
     # ---------------------------
     def normalize_text(text):
         if not isinstance(text, str):
@@ -86,15 +86,15 @@ def process_excel(file_path):
         return ""
 
     def extract_letters(s):
-        # Extrae todas las letras (en mayúscula) y las concatena
+        # Extrae las letras y las concatena en mayúsculas.
         letters = re.findall(r'[A-Z]+', s.upper())
         return "".join(letters)
 
     def custom_normalize_pozo(user_pozo, coord_list, letter_threshold=0.5):
         """
         Dado un valor de pozo del usuario, filtra candidatos de la lista del Excel de coordenadas
-        que tengan exactamente el mismo número; luego elige aquel con mayor similitud en la parte
-        alfabética. Si no hay candidatos, retorna el valor original.
+        que tengan exactamente el mismo número; luego elige el que tenga mayor similitud en la parte
+        de letras. Si no hay candidatos, retorna el valor original.
         """
         if not isinstance(user_pozo, str):
             return user_pozo
@@ -109,7 +109,6 @@ def process_excel(file_path):
             cand_number = extract_number(cand)
             if cand_number == user_number and user_number != "":
                 candidates.append(cand)
-                
         if not candidates:
             return user_pozo
         if len(candidates) == 1:
@@ -135,6 +134,7 @@ def process_excel(file_path):
 
     header = []
     col_map = {}
+    # Agregamos un campo extra "CELESTE" para marcar si la celda de POZO está pintada de celeste.
     for idx, cell in enumerate(ws[1]):
         val = cell.value if cell.value is not None else ""
         header.append(val)
@@ -151,10 +151,13 @@ def process_excel(file_path):
         if "equipo" in col_name:
             equipo_idx = idx
 
-    # Para conservar la "marca" de celeste, guardamos los índices de las filas (dentro de las filas válidas)
-    celeste_indices = []
     data = []
+    # En lugar de guardar directamente los nombres de pozos celestes, se guarda un indicador en cada fila
     for row in ws.iter_rows(min_row=2, values_only=False):
+        row_data = {}
+        # Inicialmente no tiene el indicador "CELESTE"
+        row_data["CELESTE"] = False
+
         # 1) Descartar si OBSERVACIONES está pintada de rojo
         if observaciones_idx is not None:
             cell_obs = row[observaciones_idx]
@@ -172,30 +175,24 @@ def process_excel(file_path):
                     continue
 
         # 3) Detectar pozos pintados de celeste (relleno "FF00FFFF")
-        # En vez de guardar el valor, guardamos el índice de la fila (según se vaya agregando al data)
-        celeste_flag = False
         if pozo_idx is not None:
             cell_pozo = row[pozo_idx]
             if cell_pozo.fill and cell_pozo.fill.fgColor:
                 fg_pozo = cell_pozo.fill.fgColor
                 if fg_pozo.type == "rgb" and fg_pozo.rgb and fg_pozo.rgb.upper() == "FF00FFFF":
-                    if cell_pozo.value:
-                        celeste_flag = True
+                    # Marcamos en esta fila que el pozo era celeste
+                    row_data["CELESTE"] = True
 
-        # Construir diccionario para la fila
-        row_data = {}
+        # 4) Construir el diccionario para la fila usando la fila de encabezados
         for i, cell in enumerate(row):
             key = header[i]
             row_data[key] = cell.value
-        # Si la fila fue marcada como celeste, guardamos el índice (la posición en la lista de datos)
-        if celeste_flag:
-            celeste_indices.append(len(data))
         data.append(row_data)
 
     df_main = pd.DataFrame(data)
 
     # ---------------------------
-    # Normalización de nombres de columna y renombrado
+    # Normalizar nombres de columna y renombrar según lo esperado
     # ---------------------------
     normalized_columns = {col: normalize_text(col) for col in df_main.columns}
     expected = {
@@ -223,6 +220,9 @@ def process_excel(file_path):
             rename_dict[col] = expected[norm]
     df_main.rename(columns=rename_dict, inplace=True)
 
+    # ---------------------------
+    # Procesamiento de datos adicionales
+    # ---------------------------
     if "Pérdida [m3/d]" in df_main.columns:
         df_main["Pérdida [m3/d]"] = pd.to_numeric(df_main["Pérdida [m3/d]"], errors="coerce")
         df_main.sort_values(by="Pérdida [m3/d]", ascending=False, inplace=True)
@@ -245,20 +245,20 @@ def process_excel(file_path):
             valor_norm = normalize_text(valor)
             return not any(pat in valor_norm for pat in patrones)
         df_main = df_main[df_main["EQUIPO"].apply(no_contiene)]
-    
+
     # ----------------------------------------------------
-    # NUEVA PARTE: Normalización de la columna POZO antes del merge con coordenadas
+    # **NUEVA PARTE: Normalización de la columna POZO**
     # ----------------------------------------------------
     # Cargar el Excel de coordenadas (se asume que tiene la columna "POZO")
     df_coords = pd.read_excel("coordenadas.xlsx", engine="openpyxl")
-    # Extraer lista de pozos del Excel de coordenadas
+    # Extraer la lista de pozos reales del Excel de coordenadas
     lista_pozos_coords = df_coords["POZO"].dropna().astype(str).tolist()
     
-    # Crear columna temporal para merge exacto: convertir a mayúsculas y quitar espacios en ambos DataFrames
+    # Creamos una columna temporal para facilitar un merge exacto:
     df_main["POZO_TMP"] = df_main["POZO"].astype(str).str.strip().str.upper()
     df_coords["POZO_TMP"] = df_coords["POZO"].astype(str).str.strip().str.upper()
     
-    # Realizar merge exacto usando la columna temporal
+    # Merge exacto basado en POZO_TMP
     df_main = pd.merge(
         df_main,
         df_coords[["POZO", "POZO_TMP"]],
@@ -267,27 +267,25 @@ def process_excel(file_path):
         suffixes=("", "_coord")
     )
     
-    # Para registros sin match exacto (POZO_coord es nulo), se aplica la función personalizada
+    # Para registros sin match exacto, aplicar normalización personalizada.
     def apply_normalization(row):
         if pd.isnull(row.get("POZO_coord")):
             return custom_normalize_pozo(row["POZO"], lista_pozos_coords, letter_threshold=0.5)
         return row["POZO_coord"]
     
     df_main["POZO_NORMALIZADO"] = df_main.apply(apply_normalization, axis=1)
-    # Actualizamos la columna POZO con la versión normalizada y eliminamos columnas temporales
+    
+    # Actualizar la columna POZO con el valor normalizado y descartar columnas temporales
     df_main["POZO"] = df_main["POZO_NORMALIZADO"]
     df_main.drop(columns=["POZO_TMP", "POZO_coord", "POZO_NORMALIZADO"], inplace=True)
     # ----------------------------------------------------
     
-    # Actualizar la lista de pozos celestes usando los índices guardados,
-    # de modo que en la asignación de pulling se considere el nombre normalizado.
-    pozos_celestes = []
-    for idx in celeste_indices:
-        if idx < len(df_main):
-            pozos_celestes.append(df_main.iloc[idx]["POZO"])
+    # ----------------------------------------------------
+    # Reconstruir la lista de pozos celestes: usar el indicador "CELESTE" de cada fila
+    pozos_celestes = df_main[df_main["CELESTE"] == True]["POZO"].unique().tolist()
+    # ----------------------------------------------------
     
-    # --- Merge final con el Excel de coordenadas para obtener GEO_LATITUDE y GEO_LONGITUDE ---
-    # Asegurarse de que las columnas de coordenadas sean numéricas
+    # --- Merge con el Excel de coordenadas para obtener GEO_LATITUDE y GEO_LONGITUDE ---
     df_coords["GEO_LATITUDE"] = df_coords["GEO_LATITUDE"].astype(str).str.replace(",", ".").astype(float)
     df_coords["GEO_LONGITUDE"] = df_coords["GEO_LONGITUDE"].astype(str).str.replace(",", ".").astype(float)
     df_merged = df_main.merge(df_coords[["POZO", "GEO_LATITUDE", "GEO_LONGITUDE"]], on="POZO", how="left")
@@ -315,6 +313,7 @@ def process_excel(file_path):
     df_merged = df_merged[[col for col in orden_final if col in df_merged.columns]]
     
     return df_merged, preview_df, pozos_celestes
+
 
 
 
