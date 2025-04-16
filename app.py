@@ -53,31 +53,93 @@ def process_excel(file_path):
       4. Descarta filas en las que la celda "OBSERVACIONES" esté pintada de rojo (relleno rojo).
       5. Elimina filas con valores nulos, vacíos o 0 en columnas críticas.
       6. Elimina filas cuyo valor en la columna "EQUIPO" contenga palabras no deseadas.
+      --> 6.1. **Normaliza la columna POZO** del Excel del usuario para que coincida con el Excel de coordenadas.
       7. (En lugar de convertir X e Y) Lee un Excel de coordenadas y hace un merge por "POZO"
          para obtener las columnas GEO_LATITUDE y GEO_LONGITUDE.
       8. Si algún pozo no se encuentra en el Excel de coordenadas, se avisa al usuario.
       9. Se conservan y renombran las columnas requeridas, y se agregan PROD_DT y RUBRO.
     """
-    from openpyxl import load_workbook
     import pandas as pd
     import datetime
+    import os
+    import re
+    import unicodedata
+    from openpyxl import load_workbook
+    from geopy.distance import geodesic
+    from difflib import SequenceMatcher
 
-    # --- Leer el Excel principal (hoja "dataset") ---
+    # ---------------------------
+    # Función de normalización de texto y nombres
+    # ---------------------------
+    def normalize_text(text):
+        if not isinstance(text, str):
+            return text
+        text = text.strip().lower()
+        text = unicodedata.normalize('NFKD', text).encode('ASCII', 'ignore').decode('utf-8')
+        text = re.sub(r'\s+', ' ', text)
+        return text
+
+    def extract_number(s):
+        match = re.search(r'(\d+)', s)
+        if match:
+            return match.group(1)
+        return ""
+
+    def extract_letters(s):
+        # Extrae todas las letras y las concatena en mayúscula.
+        letters = re.findall(r'[A-Z]+', s.upper())
+        return "".join(letters)
+
+    def custom_normalize_pozo(user_pozo, coord_list, letter_threshold=0.5):
+        """
+        Dado un valor de pozo del usuario, filtra candidatos de la lista del Excel de coordenadas
+        que tengan exactamente el mismo número; luego elige el que tenga mayor similitud en la parte
+        de letras. Si no hay candidatos, retorna el valor original.
+        """
+        if not isinstance(user_pozo, str):
+            return user_pozo
+        user_pozo = user_pozo.strip()
+        user_number = extract_number(user_pozo)
+        user_letters = extract_letters(user_pozo)
+        
+        # Filtrar candidatos con el mismo número
+        candidates = []
+        for cand in coord_list:
+            cand = cand.strip()
+            cand_number = extract_number(cand)
+            if cand_number == user_number and user_number != "":
+                candidates.append(cand)
+                
+        if not candidates:
+            return user_pozo
+        if len(candidates) == 1:
+            return candidates[0]
+        
+        best_candidate = None
+        best_ratio = 0
+        for cand in candidates:
+            cand_letters = extract_letters(cand)
+            ratio = SequenceMatcher(None, user_letters, cand_letters).ratio()
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_candidate = cand
+        return best_candidate if best_ratio >= letter_threshold else user_pozo
+
+    # ---------------------------
+    # Lectura del Excel principal con openpyxl
+    # ---------------------------
     wb = load_workbook(file_path, data_only=True)
     if "dataset" not in wb.sheetnames:
         raise ValueError("La hoja 'dataset' no se encontró en el archivo.")
     ws = wb["dataset"]
 
-    # Extraer encabezados y normalizarlos
     header = []
     col_map = {}
     for idx, cell in enumerate(ws[1]):
         val = cell.value if cell.value is not None else ""
-        norm = normalize_text(val)
         header.append(val)
-        col_map[idx] = norm
+        col_map[idx] = normalize_text(val)
 
-    # Identificar los índices de las columnas "OBSERVACIONES" y "POZO" (buscando la subcadena)
     observaciones_idx = None
     pozo_idx = None
     equipo_idx = None
@@ -88,31 +150,27 @@ def process_excel(file_path):
             pozo_idx = idx
         if "equipo" in col_name:
             equipo_idx = idx
-    
- 
- # Recorrer las filas (desde la fila 2) en una sola iteración
+
     data = []
     pozos_celestes = []
     for row in ws.iter_rows(min_row=2, values_only=False):
-        # 1) Descartar si OBSERVACIONES está pintada de rojo
+        # Filtrar según OBSERVACIONES pintadas de rojo
         if observaciones_idx is not None:
             cell_obs = row[observaciones_idx]
             if cell_obs.fill and cell_obs.fill.fgColor:
                 fg_obs = cell_obs.fill.fgColor
                 if fg_obs.type == "rgb" and fg_obs.rgb and fg_obs.rgb.upper() == "FFFF0000":
-                    # Se descarta esta fila
                     continue
 
-        # 2) Descartar si EQUIPO contiene "B2" o "B3"
+        # Filtrar filas donde "EQUIPO" contenga "B2" o "B3"
         if equipo_idx is not None:
             cell_equipo = row[equipo_idx]
             if cell_equipo.value:
                 valor_equipo = str(cell_equipo.value).lower()
-                # Si encuentras la subcadena "b2" o "b3" en el texto, descarta la fila
                 if "b2" in valor_equipo or "b3" in valor_equipo:
                     continue
 
-        # 3) Detectar pozos pintados de celeste (relleno "FF00FFFF")
+        # Detectar pozos pintados de celeste (relleno "FF00FFFF")
         if pozo_idx is not None:
             cell_pozo = row[pozo_idx]
             if cell_pozo.fill and cell_pozo.fill.fgColor:
@@ -121,17 +179,15 @@ def process_excel(file_path):
                     if cell_pozo.value:
                         pozos_celestes.append(cell_pozo.value)
 
-        # 4) Construir diccionario de la fila usando la fila de encabezados
+        # Construir el diccionario para la fila
         row_data = {}
         for i, cell in enumerate(row):
             key = header[i]
             row_data[key] = cell.value
         data.append(row_data)
 
-    # Crear DataFrame del Excel principal usando la lista filtrada "data"
     df_main = pd.DataFrame(data)
 
-    # --- Continuar con el procesamiento normal ---
     # Normalizar nombres de columna y renombrar según lo esperado
     normalized_columns = {col: normalize_text(col) for col in df_main.columns}
     expected = {
@@ -159,7 +215,6 @@ def process_excel(file_path):
             rename_dict[col] = expected[norm]
     df_main.rename(columns=rename_dict, inplace=True)
 
-    # --- Operaciones de filtrado y preview ---
     if "Pérdida [m3/d]" in df_main.columns:
         df_main["Pérdida [m3/d]"] = pd.to_numeric(df_main["Pérdida [m3/d]"], errors="coerce")
         df_main.sort_values(by="Pérdida [m3/d]", ascending=False, inplace=True)
@@ -182,22 +237,54 @@ def process_excel(file_path):
             valor_norm = normalize_text(valor)
             return not any(pat in valor_norm for pat in patrones)
         df_main = df_main[df_main["EQUIPO"].apply(no_contiene)]
-
-    # --- Merge con el Excel de coordenadas ---
-    import pandas as pd
-    df_coords = pd.read_excel("coordenadas.xlsx")
-    df_coords = df_coords[["POZO", "GEO_LATITUDE", "GEO_LONGITUDE"]]
+    
+    # ----------------------------------------------------
+    # **NUEVA PARTE: Normalización de la columna POZO**
+    # Antes de hacer el merge con el Excel de coordenadas, normalizamos los nombres de POZO.
+    # ----------------------------------------------------
+    # Cargar el Excel de coordenadas (se asume que tiene la columna "POZO")
+    df_coords = pd.read_excel("coordenadas.xlsx", engine="openpyxl")
+    # Extraer lista de pozos del Excel de coordenadas
+    lista_pozos_coords = df_coords["POZO"].dropna().astype(str).tolist()
+    
+    # Creamos una columna temporal para hacer el merge exacto: en ambos DataFrames se usan valores en mayúsculas y sin espacios.
+    df_main["POZO_TMP"] = df_main["POZO"].astype(str).str.strip().str.upper()
+    df_coords["POZO_TMP"] = df_coords["POZO"].astype(str).str.strip().str.upper()
+    
+    # Primer merge exacto por la columna temporal
+    df_main = pd.merge(
+        df_main,
+        df_coords[["POZO", "POZO_TMP"]],
+        on="POZO_TMP",
+        how="left",
+        suffixes=("", "_coord")
+    )
+    
+    # Para los registros sin match exacto, aplicamos la normalización personalizada.
+    def apply_normalization(row):
+        if pd.isnull(row.get("POZO_coord")):
+            return custom_normalize_pozo(row["POZO"], lista_pozos_coords, letter_threshold=0.5)
+        return row["POZO_coord"]
+    
+    df_main["POZO_NORMALIZADO"] = df_main.apply(apply_normalization, axis=1)
+    
+    # Actualizamos la columna POZO con la versión normalizada y eliminamos columnas temporales
+    df_main["POZO"] = df_main["POZO_NORMALIZADO"]
+    df_main.drop(columns=["POZO_TMP", "POZO_coord", "POZO_NORMALIZADO"], inplace=True)
+    # ----------------------------------------------------
+    
+    # --- Merge con el Excel de coordenadas para obtener GEO_LATITUDE y GEO_LONGITUDE ---
     df_coords["GEO_LATITUDE"] = df_coords["GEO_LATITUDE"].astype(str).str.replace(",", ".").astype(float)
     df_coords["GEO_LONGITUDE"] = df_coords["GEO_LONGITUDE"].astype(str).str.replace(",", ".").astype(float)
-
-    df_merged = df_main.merge(df_coords, on="POZO", how="left")
+    df_merged = df_main.merge(df_coords[["POZO", "GEO_LATITUDE", "GEO_LONGITUDE"]], on="POZO", how="left")
+    
     missing_pozos = df_merged[
         df_merged["GEO_LATITUDE"].isnull() | df_merged["GEO_LONGITUDE"].isnull()
     ]["POZO"].unique()
     if len(missing_pozos) > 0:
         flash(f"Atención: No se encontraron coordenadas para los siguientes pozos: {', '.join(missing_pozos)}")
         df_merged = df_merged.dropna(subset=["GEO_LATITUDE", "GEO_LONGITUDE"])
-
+    
     columnas_requeridas = ["Activo", "POZO", "Pérdida [m3/d]", "Plan [Hs/INT]", "Batería"]
     df_merged = df_merged[[col for col in columnas_requeridas if col in df_merged.columns] + ["GEO_LATITUDE", "GEO_LONGITUDE"]]
     df_merged.rename(columns={
@@ -206,14 +293,15 @@ def process_excel(file_path):
         "Plan [Hs/INT]": "TIEMPO PLANIFICADO",
         "Batería": "BATERÍA"
     }, inplace=True)
-
+    
     df_merged["PROD_DT"] = datetime.date.today().strftime("%Y-%m-%d")
     df_merged["RUBRO"] = "ESPERA DE TRACTOR"
-
+    
     orden_final = ["POZO", "NETA [M3/D]", "PROD_DT", "RUBRO", "GEO_LATITUDE", "GEO_LONGITUDE", "BATERÍA", "ZONA", "TIEMPO PLANIFICADO"]
     df_merged = df_merged[[col for col in orden_final if col in df_merged.columns]]
-
+    
     return df_merged, preview_df, pozos_celestes
+
 
  
 # =============================================================================
