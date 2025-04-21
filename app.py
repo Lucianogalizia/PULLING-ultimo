@@ -355,25 +355,27 @@ def upload_file():
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
 
-        # Procesar el Excel dentro de un bloque try-except
-        try:
-            # Ahora process_excel devuelve 3 elementos
-            df_clean, preview_df, pozos_celestes = process_excel(filepath)
-        except Exception as e:
-            flash(f"Error al procesar el Excel: {e}")
-            return redirect(request.url)
-
-        # Almacenar los resultados en data_store (estado de sesión simulado)
-        data_store["df"] = df_clean
-        data_store["celeste_pozos"] = pozos_celestes
-
-        # Notificar y renderizar la vista de éxito con un preview
-        flash("Archivo procesado exitosamente. A continuación se muestra un preview (20 filas).")
+       # Leer solo preview
+        preview_df = pd.read_excel(filepath, sheet_name='dataset', engine='openpyxl').head(20)
         preview_html = preview_df.to_html(classes="table table-striped", index=False)
-        return render_template("upload_success.html", preview=preview_html)
+        return render_template('upload_preview.html', preview=preview_html, filepath=filepath)
+    return render_template('upload.html')
 
-    # Si es GET, mostrar el formulario de subida
-    return render_template("upload.html")
+@app.route("/process_full", methods=["POST"])
+def process_full():
+    filepath = request.form.get('filepath')
+    if not filepath or not os.path.exists(filepath):
+        flash('No se encontró el archivo para procesar.')
+        return redirect(url_for('upload_file'))
+    try:
+        df_clean, preview_html, celestes = process_excel(filepath)
+    except Exception as e:
+        flash(f'Error al procesar el Excel completo: {e}')
+        return redirect(url_for('upload_file'))
+    data_store['df'] = df_clean
+    data_store['celeste_pozos'] = celestes
+    flash('Procesamiento completo. Aquí tienes el preview final.')
+    return render_template('upload_success.html', preview=preview_html)
  
 @app.route("/filter", methods=["GET", "POST"])
 def filter_zonas():
