@@ -354,8 +354,8 @@ def upload_file():
     return render_template("upload.html")
 
 
- @app.route("/status/<task_id>", methods=["GET"])
- def task_status(task_id):
+@app.route("/status/<task_id>", methods=["GET"])
+def task_status(task_id):
      from celery_worker import celery
      res = celery.AsyncResult(task_id)
      state = res.state
@@ -381,7 +381,7 @@ def upload_file():
      return jsonify({
          'state': state,
          'error': str(res.result)
-     }), 500
+     }), 500 
        
 @app.route("/filter", methods=["GET", "POST"])
 def filter_zonas():
