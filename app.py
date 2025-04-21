@@ -356,32 +356,32 @@ def upload_file():
 
 @app.route("/status/<task_id>", methods=["GET"])
 def task_status(task_id):
-     from celery_worker import celery
-     res = celery.AsyncResult(task_id)
-     state = res.state
+    from celery_worker import celery
+    res = celery.AsyncResult(task_id)
+    state = res.state
 
-     if state in ('PENDING', 'STARTED'):
-         return jsonify({'state': state}), 202
+    if state in ('PENDING', 'STARTED'):
+        return jsonify({'state': state}), 202
 
-     if state == 'SUCCESS':
--        result = res.result or {}
--        data_store['pozos_celestes'] = result.get('pozos_celestes', [])
--        return render_template("upload_success.html", preview=result.get('preview', ''))
-+        result = res.result or {}
-+        # 1) Guardamos pozos celestes
-+        data_store['pozos_celestes'] = result.get('pozos_celestes', [])
-+        # 2) Reconstruimos y almacenamos df_clean
-+        records = result.get('data_records', [])
-+        df_clean = pd.DataFrame.from_records(records)
-+        data_store['df'] = df_clean
-+        # 3) Mostramos el preview
-+        return render_template("upload_success.html", preview=result.get('preview', ''))
+    if state == 'SUCCESS':
+-       result = res.result or {}
+-       data_store['pozos_celestes'] = result.get('pozos_celestes', [])
+-       return render_template("upload_success.html", preview=result.get('preview', ''))
++       result = res.result or {}
++       # 1) Guardamos pozos celestes
++       data_store['pozos_celestes'] = result.get('pozos_celestes', [])
++       # 2) Reconstruimos y almacenamos df_clean
++       records = result.get('data_records', [])
++       df_clean = pd.DataFrame.from_records(records)
++       data_store['df'] = df_clean
++       # 3) Mostramos el preview
++       return render_template("upload_success.html", preview=result.get('preview', ''))
 
-     # errores u otros estados
-     return jsonify({
-         'state': state,
-         'error': str(res.result)
-     }), 500 
+      # errores u otros estados
+    return jsonify({
+        'state': state,
+        'error': str(res.result)
+    }), 500 
        
 @app.route("/filter", methods=["GET", "POST"])
 def filter_zonas():
