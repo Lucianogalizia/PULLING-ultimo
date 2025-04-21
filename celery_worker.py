@@ -27,18 +27,17 @@ celery.conf.update(
 from app import process_excel
 
 @celery.task(name='tasks.process_excel_task')
-def process_excel_task(filepath):
-    """
-    Tarea asíncrona que ejecuta process_excel y devuelve sus resultados.
-    """
-    # process_excel devuelve: df_clean, preview_df, pozos_celestes
-    df_clean, preview_df, pozos_celestes = process_excel(filepath)
+ def process_excel_task(filepath):
+     # process_excel devuelve: df_clean, preview_df, pozos_celestes
+     df_clean, preview_df, pozos_celestes = process_excel(filepath)
 
-    # Convertimos preview_df a HTML (string) para enviarlo como resultado
-    preview_html = preview_df.to_html(classes="table table-striped", index=False)
+     preview_html = preview_df.to_html(classes="table table-striped", index=False)
++    # Convertimos todo df_clean a lista de dicts
++    data_records = df_clean.to_dict(orient='records')
 
-    return {
-        'status': 'completed',
-        'preview': preview_html,
-        'pozos_celestes': pozos_celestes
-    }
+     return {
+         'status': 'completed',
+         'preview': preview_html,
+         'pozos_celestes': pozos_celestes,
++        'data_records': data_records,
+     }
