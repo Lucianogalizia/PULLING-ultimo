@@ -356,7 +356,15 @@ def upload_file():
 
 @app.route("/status/<task_id>", methods=["GET"])
 def task_status(task_id):
+    """
+    Consulta el estado de la tarea Celery y devuelve:
+      - 202 + JSON {'state': ...} si sigue PENDING/STARTED
+      - 200 + render_template(...) si SUCCESS
+      - 500 + JSON {'state','error'} en FAILURE
+    """
     from celery_worker import celery
+    import pandas as pd
+
     res = celery.AsyncResult(task_id)
     state = res.state
 
@@ -364,20 +372,17 @@ def task_status(task_id):
         return jsonify({'state': state}), 202
 
     if state == 'SUCCESS':
--       result = res.result or {}
--       data_store['pozos_celestes'] = result.get('pozos_celestes', [])
--       return render_template("upload_success.html", preview=result.get('preview', ''))
-+       result = res.result or {}
-+       # 1) Guardamos pozos celestes
-+       data_store['pozos_celestes'] = result.get('pozos_celestes', [])
-+       # 2) Reconstruimos y almacenamos df_clean
-+       records = result.get('data_records', [])
-+       df_clean = pd.DataFrame.from_records(records)
-+       data_store['df'] = df_clean
-+       # 3) Mostramos el preview
-+       return render_template("upload_success.html", preview=result.get('preview', ''))
+        result = res.result or {}
+        # Guardamos pozos celestes
+        data_store['pozos_celestes'] = result.get('pozos_celestes', [])
+        # Reconstruimos y guardamos el DataFrame completo
+        records = result.get('data_records', [])
+        df_clean = pd.DataFrame.from_records(records)
+        data_store['df'] = df_clean
+        # Renderizamos la plantilla final con el preview
+        return render_template("upload_success.html", preview=result.get('preview', ''))
 
-      # errores u otros estados
+    # En caso de error
     return jsonify({
         'state': state,
         'error': str(res.result)
