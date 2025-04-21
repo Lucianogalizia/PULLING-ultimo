@@ -16,32 +16,40 @@
 
   <script>
     const taskId = "{{ task_id }}";
+
     function checkStatus() {
       fetch(`/status/${taskId}`)
         .then(res => {
-          // Si devuelve HTML (200), lo inyectamos directamente
-          if (res.headers.get('content-type').includes('text/html')) {
+          const contentType = res.headers.get('content-type') || '';
+          if (contentType.includes('text/html')) {
+            // El servidor devolvió la página final de éxito
             return res.text().then(html => {
-              document.body.innerHTML = html;
+              document.documentElement.innerHTML = html;
             });
           }
+          // Si viene JSON, seguimos pendientes
           return res.json().then(data => {
             if (data.state === 'SUCCESS' || data.state === 'completed') {
-              // El servidor ya renderiza upload_success.html
+              // Por seguridad, volvemos a pedir el HTML final
               return fetch(`/status/${taskId}`)
                 .then(r2 => r2.text())
-                .then(html => document.body.innerHTML = html);
+                .then(html => {
+                  document.documentElement.innerHTML = html;
+                });
             }
-            // si sigue pendiente, volvemos a consultar
+            // Si aún está PENDING/STARTED, reintentamos
             setTimeout(checkStatus, 1000);
           });
         })
         .catch(err => {
-          console.error(err);
+          console.error('Error al consultar estado:', err);
           setTimeout(checkStatus, 2000);
         });
     }
+
+    // Arrancamos el polling
     checkStatus();
   </script>
 </body>
 </html>
+
