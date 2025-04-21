@@ -321,6 +321,11 @@ def process_excel(file_path):
 # =============================================================================
 # Rutas de la Aplicación Flask
 # =============================================================================
+@app.route("/")
+def index():
+    # al acceder a raíz, redirige inmediatamente a /upload
+    return redirect(url_for("upload_file"))
+
 @app.route("/upload", methods=["GET", "POST"])
 def upload_file():
     if request.method == "POST":
