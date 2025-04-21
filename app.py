@@ -321,61 +321,75 @@ def process_excel(file_path):
 # =============================================================================
 # Rutas de la Aplicación Flask
 # =============================================================================
-@app.route("/")
-def index():
-    return redirect(url_for("upload_file"))
- 
 @app.route("/upload", methods=["GET", "POST"])
 def upload_file():
-    """
-    Ruta para subir y procesar el archivo Excel.
-    1. Valida que el archivo exista en la solicitud y tenga un nombre.
-    2. Guarda el archivo en la carpeta UPLOAD_FOLDER.
-    3. Llama a process_excel(filepath), que devuelve:
-       - df_clean: DataFrame final limpio.
-       - preview_df: DataFrame con preview (20 filas).
-       - pozos_celestes: Lista de pozos que están pintados de celeste.
-    4. Almacena df_clean y pozos_celestes en data_store para usarlos posteriormente.
-    5. Muestra un mensaje de éxito y un preview de las primeras 20 filas.
-    """
     if request.method == "POST":
-        # Verificar si se adjuntó el archivo
+        # 1) Validaciones
         if "excel_file" not in request.files:
             flash("No se encontró el archivo en la solicitud.")
             return redirect(request.url)
-
         file = request.files["excel_file"]
-        # Verificar si el nombre del archivo no está vacío
         if file.filename == "":
             flash("No se seleccionó ningún archivo.")
             return redirect(request.url)
 
-        # Guardar el archivo en la carpeta configurada
+        # 2) Guardar rápido el XLSX en uploads/
         filename = secure_filename(file.filename)
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
 
-       # Leer solo preview
-        preview_df = pd.read_excel(filepath, sheet_name='dataset', engine='openpyxl').head(20)
-        preview_html = preview_df.to_html(classes="table table-striped", index=False)
-        return render_template('upload_preview.html', preview=preview_html, filepath=filepath)
-    return render_template('upload.html')
+        # 3) Leer SOLO las primeras 20 filas de 'dataset'
+        try:
+            preview_df = pd.read_excel(
+                filepath,
+                sheet_name="dataset",
+                engine="openpyxl"
+            ).head(20)
+        except Exception as e:
+            flash(f"Error al leer el preview: {e}")
+            return redirect(request.url)
+
+        preview_html = preview_df.to_html(
+            classes="table table-striped", index=False
+        )
+
+        # 4) Mostrar upload_preview.html con botón para procesar completo
+        return render_template(
+            "upload_preview.html",
+            preview=preview_html,
+            filepath=filepath
+        )
+
+    # GET => formulario de subida
+    return render_template("upload.html")
 
 @app.route("/process_full", methods=["POST"])
 def process_full():
-    filepath = request.form.get('filepath')
+    filepath = request.form.get("filepath")
     if not filepath or not os.path.exists(filepath):
-        flash('No se encontró el archivo para procesar.')
-        return redirect(url_for('upload_file'))
+        flash("No se encontró el archivo para procesar.")
+        return redirect(url_for("upload_file"))
+
     try:
-        df_clean, preview_html, celestes = process_excel(filepath)
+        # Aquí sí lanzamos todo el process_excel
+        df_clean, preview_df, celestes = process_excel(filepath)
     except Exception as e:
-        flash(f'Error al procesar el Excel completo: {e}')
-        return redirect(url_for('upload_file'))
-    data_store['df'] = df_clean
-    data_store['celeste_pozos'] = celestes
-    flash('Procesamiento completo. Aquí tienes el preview final.')
-    return render_template('upload_success.html', preview=preview_html)
+        flash(f"Error al procesar el Excel completo: {e}")
+        return redirect(url_for("upload_file"))
+
+    # Guardamos el DataFrame limpio y los pozos pintados
+    data_store["df"] = df_clean
+    data_store["celeste_pozos"] = celestes
+
+    # Preparamos el preview final otra vez (o reutilizas preview_df)
+    preview_html = preview_df.to_html(
+        classes="table table-striped", index=False
+    )
+    flash("Procesamiento completo exitoso.")
+    return render_template(
+        "upload_success.html",
+        preview=preview_html
+    )
  
 @app.route("/filter", methods=["GET", "POST"])
 def filter_zonas():
