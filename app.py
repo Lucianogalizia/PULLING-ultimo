@@ -323,78 +323,57 @@ def process_excel(file_path):
 # =============================================================================
 @app.route("/")
 def index():
-    # al acceder a raíz, redirige inmediatamente a /upload
     return redirect(url_for("upload_file"))
-
+ 
 @app.route("/upload", methods=["GET", "POST"])
 def upload_file():
+    """
+    Ruta para subir y procesar el archivo Excel.
+    1. Valida que el archivo exista en la solicitud y tenga un nombre.
+    2. Guarda el archivo en la carpeta UPLOAD_FOLDER.
+    3. Llama a process_excel(filepath), que devuelve:
+       - df_clean: DataFrame final limpio.
+       - preview_df: DataFrame con preview (20 filas).
+       - pozos_celestes: Lista de pozos que están pintados de celeste.
+    4. Almacena df_clean y pozos_celestes en data_store para usarlos posteriormente.
+    5. Muestra un mensaje de éxito y un preview de las primeras 20 filas.
+    """
     if request.method == "POST":
-        # 1) Validaciones
+        # Verificar si se adjuntó el archivo
         if "excel_file" not in request.files:
             flash("No se encontró el archivo en la solicitud.")
             return redirect(request.url)
+
         file = request.files["excel_file"]
+        # Verificar si el nombre del archivo no está vacío
         if file.filename == "":
             flash("No se seleccionó ningún archivo.")
             return redirect(request.url)
 
-        # 2) Guardar rápido el XLSX en uploads/
+        # Guardar el archivo en la carpeta configurada
         filename = secure_filename(file.filename)
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
 
-        # 3) Leer SOLO las primeras 20 filas de 'dataset'
+        # Procesar el Excel dentro de un bloque try-except
         try:
-            preview_df = pd.read_excel(
-                filepath,
-                sheet_name="dataset",
-                engine="openpyxl"
-            ).head(20)
+            # Ahora process_excel devuelve 3 elementos
+            df_clean, preview_df, pozos_celestes = process_excel(filepath)
         except Exception as e:
-            flash(f"Error al leer el preview: {e}")
+            flash(f"Error al procesar el Excel: {e}")
             return redirect(request.url)
 
-        preview_html = preview_df.to_html(
-            classes="table table-striped", index=False
-        )
+        # Almacenar los resultados en data_store (estado de sesión simulado)
+        data_store["df"] = df_clean
+        data_store["celeste_pozos"] = pozos_celestes
 
-        # 4) Mostrar upload_preview.html con botón para procesar completo
-        return render_template(
-            "upload_preview.html",
-            preview=preview_html,
-            filepath=filepath
-        )
+        # Notificar y renderizar la vista de éxito con un preview
+        flash("Archivo procesado exitosamente. A continuación se muestra un preview (20 filas).")
+        preview_html = preview_df.to_html(classes="table table-striped", index=False)
+        return render_template("upload_success.html", preview=preview_html)
 
-    # GET => formulario de subida
+    # Si es GET, mostrar el formulario de subida
     return render_template("upload.html")
-
-@app.route("/process_full", methods=["POST"])
-def process_full():
-    filepath = request.form.get("filepath")
-    if not filepath or not os.path.exists(filepath):
-        flash("No se encontró el archivo para procesar.")
-        return redirect(url_for("upload_file"))
-
-    try:
-        # Aquí sí lanzamos todo el process_excel
-        df_clean, preview_df, celestes = process_excel(filepath)
-    except Exception as e:
-        flash(f"Error al procesar el Excel completo: {e}")
-        return redirect(url_for("upload_file"))
-
-    # Guardamos el DataFrame limpio y los pozos pintados
-    data_store["df"] = df_clean
-    data_store["celeste_pozos"] = celestes
-
-    # Preparamos el preview final otra vez (o reutilizas preview_df)
-    preview_html = preview_df.to_html(
-        classes="table table-striped", index=False
-    )
-    flash("Procesamiento completo exitoso.")
-    return render_template(
-        "upload_success.html",
-        preview=preview_html
-    )
  
 @app.route("/filter", methods=["GET", "POST"])
 def filter_zonas():
@@ -704,5 +683,6 @@ def assign():
  
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
