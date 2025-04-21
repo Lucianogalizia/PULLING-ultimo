@@ -1,7 +1,7 @@
 # =============================================================================
 # Importación de Librerías y Configuración Inicial
 # =============================================================================
-from flask import Flask, request, redirect, url_for, render_template, flash, jsonify
+from flask import Flask, request, redirect, url_for, render_template, flash
 import pandas as pd
 import numpy as np
 import datetime
@@ -11,8 +11,7 @@ import unicodedata
 from openpyxl import load_workbook
 from werkzeug.utils import secure_filename
 from geopy.distance import geodesic
-
-
+ 
 # Configuración de la aplicación Flask
 app = Flask(__name__)
 app.secret_key = "super_secret_key"  # Clave secreta para sesiones y flash
@@ -319,81 +318,63 @@ def process_excel(file_path):
 
 
  
-# ========================
-# Rutas de la Aplicación
-# ========================
-
+# =============================================================================
+# Rutas de la Aplicación Flask
+# =============================================================================
 @app.route("/")
 def index():
     return redirect(url_for("upload_file"))
-
+ 
 @app.route("/upload", methods=["GET", "POST"])
 def upload_file():
     """
-    GET: muestra formulario de subida.
-    POST: guarda el Excel, encola la tarea y devuelve inmediatamente la pantalla de 'pendiente'.
+    Ruta para subir y procesar el archivo Excel.
+    1. Valida que el archivo exista en la solicitud y tenga un nombre.
+    2. Guarda el archivo en la carpeta UPLOAD_FOLDER.
+    3. Llama a process_excel(filepath), que devuelve:
+       - df_clean: DataFrame final limpio.
+       - preview_df: DataFrame con preview (20 filas).
+       - pozos_celestes: Lista de pozos que están pintados de celeste.
+    4. Almacena df_clean y pozos_celestes en data_store para usarlos posteriormente.
+    5. Muestra un mensaje de éxito y un preview de las primeras 20 filas.
     """
     if request.method == "POST":
-        # 1) Validaciones básicas
+        # Verificar si se adjuntó el archivo
         if "excel_file" not in request.files:
             flash("No se encontró el archivo en la solicitud.")
             return redirect(request.url)
 
         file = request.files["excel_file"]
+        # Verificar si el nombre del archivo no está vacío
         if file.filename == "":
             flash("No se seleccionó ningún archivo.")
             return redirect(request.url)
 
-        # 2) Guardar el archivo rápidamente
+        # Guardar el archivo en la carpeta configurada
         filename = secure_filename(file.filename)
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
 
-        # 3) Import dinámico y encolar la tarea
-        from celery_worker import process_excel_task
-        task = process_excel_task.delay(filepath)
+        # Procesar el Excel dentro de un bloque try-except
+        try:
+            # Ahora process_excel devuelve 3 elementos
+            df_clean, preview_df, pozos_celestes = process_excel(filepath)
+        except Exception as e:
+            flash(f"Error al procesar el Excel: {e}")
+            return redirect(request.url)
 
-        # 4) Responder _inmediatamente_ con la plantilla de espera
-        return render_template("upload_pending.html", task_id=task.id), 202
+        # Almacenar los resultados en data_store (estado de sesión simulado)
+        data_store["df"] = df_clean
+        data_store["celeste_pozos"] = pozos_celestes
 
-    # Para GET, simplemente renderizamos el formulario
+        # Notificar y renderizar la vista de éxito con un preview
+        flash("Archivo procesado exitosamente. A continuación se muestra un preview (20 filas).")
+        preview_html = preview_df.to_html(classes="table table-striped", index=False)
+        return render_template("upload_success.html", preview=preview_html)
+
+    # Si es GET, mostrar el formulario de subida
     return render_template("upload.html")
-
-
-@app.route("/status/<task_id>", methods=["GET"])
-def task_status(task_id):
-    """
-    Consulta el estado de la tarea Celery y devuelve:
-      - 202 + JSON {'state': ...} si sigue PENDING/STARTED
-      - 200 + render_template(...) si SUCCESS
-      - 500 + JSON {'state','error'} en FAILURE
-    """
-    from celery_worker import celery
-    import pandas as pd
-
-    res = celery.AsyncResult(task_id)
-    state = res.state
-
-    if state in ('PENDING', 'STARTED'):
-        return jsonify({'state': state}), 202
-
-    if state == 'SUCCESS':
-        result = res.result or {}
-        # Guardamos pozos celestes
-        data_store['pozos_celestes'] = result.get('pozos_celestes', [])
-        # Reconstruimos y guardamos el DataFrame completo
-        records = result.get('data_records', [])
-        df_clean = pd.DataFrame.from_records(records)
-        data_store['df'] = df_clean
-        # Renderizamos la plantilla final con el preview
-        return render_template("upload_success.html", preview=result.get('preview', ''))
-
-    # En caso de error
-    return jsonify({
-        'state': state,
-        'error': str(res.result)
-    }), 500 
-       
+ 
 @app.route("/filter", methods=["GET", "POST"])
 def filter_zonas():
     if "df" not in data_store:
@@ -702,3 +683,4 @@ def assign():
  
 if __name__ == "__main__":
     app.run(debug=True)
+
