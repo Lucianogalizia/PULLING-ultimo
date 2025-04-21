@@ -11,7 +11,8 @@ import unicodedata
 from openpyxl import load_workbook
 from werkzeug.utils import secure_filename
 from geopy.distance import geodesic
- 
+from celery_worker import process_excel_task  # Tarea en segundo plano
+
 # Configuración de la aplicación Flask
 app = Flask(__name__)
 app.secret_key = "super_secret_key"  # Clave secreta para sesiones y flash
@@ -339,42 +340,47 @@ def upload_file():
     5. Muestra un mensaje de éxito y un preview de las primeras 20 filas.
     """
     if request.method == "POST":
-        # Verificar si se adjuntó el archivo
         if "excel_file" not in request.files:
             flash("No se encontró el archivo en la solicitud.")
             return redirect(request.url)
 
         file = request.files["excel_file"]
-        # Verificar si el nombre del archivo no está vacío
         if file.filename == "":
             flash("No se seleccionó ningún archivo.")
             return redirect(request.url)
 
-        # Guardar el archivo en la carpeta configurada
         filename = secure_filename(file.filename)
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        filepath = os.path.join(auth_app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
 
-        # Procesar el Excel dentro de un bloque try-except
-        try:
-            # Ahora process_excel devuelve 3 elementos
-            df_clean, preview_df, pozos_celestes = process_excel(filepath)
-        except Exception as e:
-            flash(f"Error al procesar el Excel: {e}")
-            return redirect(request.url)
+        # Encolar el procesamiento con Celery
+        task = process_excel_task.delay(filepath)
+        # Mostramos una página de "espera" con el task_id para polling
+        return render_template("upload_pending.html", task_id=task.id)
 
-        # Almacenar los resultados en data_store (estado de sesión simulado)
-        data_store["df"] = df_clean
-        data_store["celeste_pozos"] = pozos_celestes
-
-        # Notificar y renderizar la vista de éxito con un preview
-        flash("Archivo procesado exitosamente. A continuación se muestra un preview (20 filas).")
-        preview_html = preview_df.to_html(classes="table table-striped", index=False)
-        return render_template("upload_success.html", preview=preview_html)
-
-    # Si es GET, mostrar el formulario de subida
+    # GET: formulario de subida
     return render_template("upload.html")
- 
+
+
+@auth_app.route("/status/<task_id>", methods=["GET"])
+def task_status(task_id):
+    """
+    Consulta el estado de la tarea y muestra el resultado cuando esté listo.
+    """
+    res = process_excel_task.AsyncResult(task_id)
+    state = res.state
+    if state == 'PENDING' or state == 'STARTED':
+        return jsonify({'state': state})
+    elif state == 'SUCCESS':
+        result = res.result
+        # Guardamos en data_store para usar en pasos siguientes
+        data_store['pozos_celestes'] = result.get('pozos_celestes', [])
+        # Renderizamos la vista de éxito con el preview HTML
+        return render_template("upload_success.html", preview=result['preview'])
+    else:
+        # FALLÓ o está RETRY u otro estado
+        return jsonify({'state': state, 'info': str(res.info)})
+       
 @app.route("/filter", methods=["GET", "POST"])
 def filter_zonas():
     if "df" not in data_store:
