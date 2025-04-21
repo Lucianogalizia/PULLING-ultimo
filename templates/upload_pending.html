@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Procesando archivo…</title>
+  <style>
+    body { font-family: sans-serif; text-align: center; margin-top: 50px; }
+    #spinner { font-size: 48px; }
+    #resultado { margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <h2>Procesando tu archivo, espera un momento…</h2>
+  <div id="spinner">⏳</div>
+  <div id="resultado" style="display:none;"></div>
+
+  <script>
+    const taskId = "{{ task_id }}";
+    function checkStatus() {
+      fetch(`/status/${taskId}`)
+        .then(res => {
+          // Si devuelve HTML (200), lo inyectamos directamente
+          if (res.headers.get('content-type').includes('text/html')) {
+            return res.text().then(html => {
+              document.body.innerHTML = html;
+            });
+          }
+          return res.json().then(data => {
+            if (data.state === 'SUCCESS' || data.state === 'completed') {
+              // El servidor ya renderiza upload_success.html
+              return fetch(`/status/${taskId}`)
+                .then(r2 => r2.text())
+                .then(html => document.body.innerHTML = html);
+            }
+            // si sigue pendiente, volvemos a consultar
+            setTimeout(checkStatus, 1000);
+          });
+        })
+        .catch(err => {
+          console.error(err);
+          setTimeout(checkStatus, 2000);
+        });
+    }
+    checkStatus();
+  </script>
+</body>
+</html>
