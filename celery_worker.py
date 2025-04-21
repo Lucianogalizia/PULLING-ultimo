@@ -34,11 +34,3 @@ def process_excel_task(filepath):
         'pozos_celestes': pozos_celestes,
         'data_records': data_records
     }
-
-
-
-         'status': 'completed',
-         'preview': preview_html,
-         'pozos_celestes': pozos_celestes,
-+        'data_records': data_records,
-     }
