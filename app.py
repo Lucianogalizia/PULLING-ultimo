@@ -11,7 +11,7 @@ import unicodedata
 from openpyxl import load_workbook
 from werkzeug.utils import secure_filename
 from geopy.distance import geodesic
-from celery_worker import process_excel_task  # Tarea en segundo plano
+
 
 # Configuración de la aplicación Flask
 app = Flask(__name__)
@@ -319,26 +319,16 @@ def process_excel(file_path):
 
 
  
-# =============================================================================
-# Rutas de la Aplicación Flask
-# =============================================================================
+# ========================
+# Rutas de la Aplicación
+# ========================
+
 @app.route("/")
 def index():
     return redirect(url_for("upload_file"))
- 
+
 @app.route("/upload", methods=["GET", "POST"])
 def upload_file():
-    """
-    Ruta para subir y procesar el archivo Excel.
-    1. Valida que el archivo exista en la solicitud y tenga un nombre.
-    2. Guarda el archivo en la carpeta UPLOAD_FOLDER.
-    3. Llama a process_excel(filepath), que devuelve:
-       - df_clean: DataFrame final limpio.
-       - preview_df: DataFrame con preview (20 filas).
-       - pozos_celestes: Lista de pozos que están pintados de celeste.
-    4. Almacena df_clean y pozos_celestes en data_store para usarlos posteriormente.
-    5. Muestra un mensaje de éxito y un preview de las primeras 20 filas.
-    """
     if request.method == "POST":
         if "excel_file" not in request.files:
             flash("No se encontró el archivo en la solicitud.")
@@ -350,36 +340,47 @@ def upload_file():
             return redirect(request.url)
 
         filename = secure_filename(file.filename)
-        filepath = os.path.join(auth_app.config['UPLOAD_FOLDER'], filename)
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
 
-        # Encolar el procesamiento con Celery
+        # Import dinámico para evitar circular import
+        from celery_worker import process_excel_task
+        # Encolamos la tarea
         task = process_excel_task.delay(filepath)
-        # Mostramos una página de "espera" con el task_id para polling
+        # Renderizamos una plantilla que muestra un spinner y hace polling con JS
         return render_template("upload_pending.html", task_id=task.id)
 
     # GET: formulario de subida
     return render_template("upload.html")
 
 
-@auth_app.route("/status/<task_id>", methods=["GET"])
+@app.route("/status/<task_id>", methods=["GET"])
 def task_status(task_id):
     """
-    Consulta el estado de la tarea y muestra el resultado cuando esté listo.
+    Consulta el estado de la tarea y devuelve JSON o el resultado final.
     """
-    res = process_excel_task.AsyncResult(task_id)
+    # Importamos aquí la instancia de Celery
+    from celery_worker import celery
+    res = celery.AsyncResult(task_id)
     state = res.state
-    if state == 'PENDING' or state == 'STARTED':
-        return jsonify({'state': state})
-    elif state == 'SUCCESS':
-        result = res.result
-        # Guardamos en data_store para usar en pasos siguientes
+
+    if state in ('PENDING', 'STARTED'):
+        # Aún no listo
+        return jsonify({'state': state}), 202
+
+    if state == 'SUCCESS':
+        # Tarea completada: devolvemos directamente el preview
+        result = res.result or {}
+        # Guardamos pozos celestes para pasos posteriores
         data_store['pozos_celestes'] = result.get('pozos_celestes', [])
-        # Renderizamos la vista de éxito con el preview HTML
-        return render_template("upload_success.html", preview=result['preview'])
-    else:
-        # FALLÓ o está RETRY u otro estado
-        return jsonify({'state': state, 'info': str(res.info)})
+        # Renderizamos la plantilla de éxito con el preview HTML
+        return render_template("upload_success.html", preview=result.get('preview', ''))
+
+    # En caso de error u otros estados
+    return jsonify({
+        'state': state,
+        'error': str(res.result)  # información del fallo
+    }), 500
        
 @app.route("/filter", methods=["GET", "POST"])
 def filter_zonas():
