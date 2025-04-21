@@ -329,7 +329,12 @@ def index():
 
 @app.route("/upload", methods=["GET", "POST"])
 def upload_file():
+    """
+    GET: muestra formulario de subida.
+    POST: guarda el Excel, encola la tarea y devuelve inmediatamente la pantalla de 'pendiente'.
+    """
     if request.method == "POST":
+        # 1) Validaciones básicas
         if "excel_file" not in request.files:
             flash("No se encontró el archivo en la solicitud.")
             return redirect(request.url)
@@ -339,18 +344,19 @@ def upload_file():
             flash("No se seleccionó ningún archivo.")
             return redirect(request.url)
 
+        # 2) Guardar el archivo rápidamente
         filename = secure_filename(file.filename)
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
 
-        # Import dinámico para evitar circular import
+        # 3) Import dinámico y encolar la tarea
         from celery_worker import process_excel_task
-        # Encolamos la tarea
         task = process_excel_task.delay(filepath)
-        # Renderizamos una plantilla que muestra un spinner y hace polling con JS
-        return render_template("upload_pending.html", task_id=task.id)
 
-    # GET: formulario de subida
+        # 4) Responder _inmediatamente_ con la plantilla de espera
+        return render_template("upload_pending.html", task_id=task.id), 202
+
+    # Para GET, simplemente renderizamos el formulario
     return render_template("upload.html")
 
 
