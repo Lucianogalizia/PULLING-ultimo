@@ -3,12 +3,12 @@
 import os
 from celery import Celery
 
-# 1) Obtenemos el URL de Redis, puede venir en REDIS_URL o REDISCLOUD_URL
+# Obtenemos el URL de Redis (puede estar en REDIS_URL o REDISCLOUD_URL)
 redis_url = os.environ.get('REDIS_URL') or os.environ.get('REDISCLOUD_URL')
 if not redis_url:
     raise RuntimeError("Ni REDIS_URL ni REDISCLOUD_URL están configuradas")
 
-# 2) Inicializamos Celery
+# Inicializamos Celery
 celery = Celery(
     'worker',
     broker=redis_url,
@@ -19,14 +19,14 @@ celery.conf.update(
     accept_content=['pickle'],
 )
 
-# 3) Importamos process_excel desde app.py
+# Importamos la función process_excel desde app.py
 from app import process_excel
 
-# 4) Definimos la tarea SIN espacios ni tabs antes del @
+# Definimos la tarea en Celery (sin espacios antes del decorador)
 @celery.task(name='tasks.process_excel_task')
 def process_excel_task(filepath):
     """
-    Ejecuta process_excel() y devuelve:
+    Ejecuta process_excel() y devuelve un dict con:
       - status
       - preview (HTML)
       - pozos_celestes
@@ -35,7 +35,7 @@ def process_excel_task(filepath):
     # Llamada a la función pesada
     df_clean, preview_df, pozos_celestes = process_excel(filepath)
 
-    # Construimos el resultado serializable
+    # Construcción de los datos serializables
     preview_html = preview_df.to_html(classes="table table-striped", index=False)
     data_records = df_clean.to_dict(orient='records')
 
