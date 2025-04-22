@@ -12,6 +12,7 @@ from openpyxl import load_workbook
 from werkzeug.utils import secure_filename
 from geopy.distance import geodesic
 from difflib import SequenceMatcher
+from flask import jsonify
 
 # Configuración de la aplicación Flask
 app = Flask(__name__)
