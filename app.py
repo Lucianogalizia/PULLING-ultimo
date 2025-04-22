@@ -325,16 +325,6 @@ def process_excel(file_path):
 def index():
     return redirect(url_for("upload_file"))
 
-def upload():
-    # 1) Guardás el Excel en <1s
-    file = request.files['excel_file']
-    filename = secure_filename(file.filename)
-    file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-
-    # 2) Respondés inmediatamente
-    flash('Archivo recibido, procesando…')
-    return redirect(url_for('filter'))
-
 @app.route("/upload", methods=["GET", "POST"])
 def upload_file():
     """
@@ -349,41 +339,41 @@ def upload_file():
     5. Muestra un mensaje de éxito y un preview de las primeras 20 filas.
     """
     if request.method == "POST":
-        # Verificar si se adjuntó el archivo
-        if "excel_file" not in request.files:
-            flash("No se encontró el archivo en la solicitud.")
+        file = request.files.get("excel_file")
+        if not file or file.filename=="":
+            flash("No seleccionaste archivo.")
             return redirect(request.url)
 
-        file = request.files["excel_file"]
-        # Verificar si el nombre del archivo no está vacío
-        if file.filename == "":
-            flash("No se seleccionó ningún archivo.")
-            return redirect(request.url)
-
-        # Guardar el archivo en la carpeta configurada
-        filename = secure_filename(file.filename)
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        fname = secure_filename(file.filename)
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], fname)
         file.save(filepath)
 
-        # Procesar el Excel dentro de un bloque try-except
-        try:
-            # Ahora process_excel devuelve 3 elementos
-            df_clean, preview_df, pozos_celestes = process_excel(filepath)
-        except Exception as e:
-            flash(f"Error al procesar el Excel: {e}")
-            return redirect(request.url)
+        # guardo ruta y salto al procesado
+        session['pending_excel'] = fname
+        flash("Archivo recibido. Procesando en breve…")
+        return redirect(url_for("process_file"))
 
-        # Almacenar los resultados en data_store (estado de sesión simulado)
-        data_store["df"] = df_clean
-        data_store["celeste_pozos"] = pozos_celestes
-
-        # Notificar y renderizar la vista de éxito con un preview
-        flash("Archivo procesado exitosamente. A continuación se muestra un preview (20 filas).")
-        preview_html = preview_df.to_html(classes="table table-striped", index=False)
-        return render_template("upload_success.html", preview=preview_html)
-
-    # Si es GET, mostrar el formulario de subida
     return render_template("upload.html")
+
+
+@app.route("/process", methods=["GET"])
+def process_file():
+    fname = session.pop('pending_excel', None)
+    if not fname:
+        return redirect(url_for("upload_file"))
+
+    filepath = os.path.join(app.config['UPLOAD_FOLDER'], fname)
+    try:
+        df_clean, preview_df, pozos_celestes = process_excel(filepath)
+    except Exception as e:
+        flash(f"Error procesando: {e}")
+        return redirect(url_for("upload_file"))
+
+    # guardo resultados y muestro preview
+    data_store["df"] = df_clean
+    data_store["celeste_pozos"] = pozos_celestes
+    html = preview_df.to_html(classes="table table-striped", index=False)
+    return render_template("upload_success.html", preview=html)
  
 @app.route("/filter", methods=["GET", "POST"])
 def filter_zonas():
