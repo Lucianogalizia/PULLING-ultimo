@@ -324,7 +324,17 @@ def process_excel(file_path):
 @app.route("/")
 def index():
     return redirect(url_for("upload_file"))
- 
+
+def upload():
+    # 1) Guardás el Excel en <1s
+    file = request.files['excel_file']
+    filename = secure_filename(file.filename)
+    file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+
+    # 2) Respondés inmediatamente
+    flash('Archivo recibido, procesando…')
+    return redirect(url_for('filter'))
+
 @app.route("/upload", methods=["GET", "POST"])
 def upload_file():
     """
