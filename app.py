@@ -1,7 +1,7 @@
 # =============================================================================
 # Importación de Librerías y Configuración Inicial
 # =============================================================================
-from flask import Flask, request, redirect, url_for, render_template, flash, session
+from flask import Flask, request, redirect, url_for, render_template, flash, session, jsonify
 import pandas as pd
 import numpy as np
 import datetime
@@ -11,7 +11,11 @@ import unicodedata
 from openpyxl import load_workbook
 from werkzeug.utils import secure_filename
 from geopy.distance import geodesic
- 
+import boto3, os, json
+# …
+s3 = boto3.client('s3')
+BUCKET = os.environ['S3_BUCKET']
+
 # Configuración de la aplicación Flask
 app = Flask(__name__)
 app.secret_key = "super_secret_key"  # Clave secreta para sesiones y flash
@@ -315,7 +319,24 @@ def process_excel(file_path):
     
     return df_merged, preview_df, pozos_celestes
 
+@app.route('/process_s3', methods=['POST'])
+def process_s3():
+    data = request.get_json()
+    filename = data['filename']
+    local_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    # Descarga el .xlsx desde S3 a tu carpeta local
+    s3.download_file(BUCKET, filename, local_path)
 
+    try:
+        df_clean, preview_df, pozos_celestes = process_excel(local_path)
+    except Exception as e:
+        flash(f"Error al procesar: {e}")
+        return render_template('upload.html')
+
+    data_store["df"] = df_clean
+    data_store["celeste_pozos"] = pozos_celestes
+    preview_html = preview_df.to_html(classes="table table-striped", index=False)
+    return render_template("upload_success.html", preview=preview_html)
 
 
  
@@ -325,6 +346,17 @@ def process_excel(file_path):
 @app.route("/")
 def index():
     return redirect(url_for("upload_file"))
+
+@app.route('/presign')
+def presign():
+    filename = request.args.get('filename')
+    url = s3.generate_presigned_url(
+        'put_object',
+        Params={'Bucket': BUCKET, 'Key': filename},
+        ExpiresIn=3600
+    )
+    return jsonify({'url': url})
+
 
 @app.route("/upload", methods=["GET", "POST"])
 def upload_file():
