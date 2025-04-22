@@ -365,25 +365,20 @@ def continue_process():
         flash("No se encontró el archivo. Vuelve a subirlo.")
         return redirect(url_for("upload_file"))
 
-        # Procesar el Excel dentro de un bloque try-except
-        try:
-            # Ahora process_excel devuelve 3 elementos
-            df_clean, preview_df, pozos_celestes = process_excel(filepath)
-        except Exception as e:
-            flash(f"Error al procesar el Excel: {e}")
-            return redirect(request.url)
+    # -- Procesamos el Excel sólo cuando tenemos filepath válido --
+    try:
+        df_clean, preview_df, pozos_celestes = process_excel(filepath)
+    except Exception as e:
+        flash(f"Error al procesar el Excel: {e}")
+        return redirect(url_for("upload_file"))
 
-        # Almacenar los resultados en data_store (estado de sesión simulado)
-        data_store["df"] = df_clean
-        data_store["celeste_pozos"] = pozos_celestes
+    # Guardamos los resultados en el data_store
+    data_store["df"] = df_clean
+    data_store["celeste_pozos"] = pozos_celestes
 
-        # Notificar y renderizar la vista de éxito con un preview
-        flash("Procesamiento iniciado.")
-        preview_html = preview_df.to_html(classes="table table-striped", index=False)
-        return render_template("upload_success.html", preview=preview_html)
-
-    # Si es GET, mostrar el formulario de subida
-    return render_template("upload.html")
+    # Notificamos y redirigimos al paso de filtrado
+    flash("Archivo procesado exitosamente, ya puedes filtrar zonas.")
+    return redirect(url_for("filter_zonas"))
  
 @app.route("/filter", methods=["GET", "POST"])
 def filter_zonas():
