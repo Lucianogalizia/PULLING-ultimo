@@ -24,14 +24,13 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 # Aquí guardamos jobs en curso y sus resultados
 jobs = {}
 
-def worker(job_id, path):
-    # Heavy lifting:
-    df_clean, preview_df, pozos = process_excel(path)
+def worker(job_id, filepath):
+    df_clean, preview_df, pozos_celestes = process_excel(filepath)
     jobs[job_id] = {
         "ready": True,
-        "preview_html": preview_df.to_html(classes="table table-striped", index=False),
         "df": df_clean,
-        "pozos": pozos
+        "preview": preview_df.to_html(classes="table table-striped", index=False),
+        "pozos": pozos_celestes
     }
  
 # =============================================================================
@@ -334,39 +333,46 @@ def process_excel(file_path):
 def index():
     return redirect(url_for("upload_file"))
  
-@app.route("/upload", methods=["GET","POST"])
+@app.route("/upload", methods=["GET", "POST"])
 def upload_file():
     if request.method == "POST":
-        f = request.files.get("excel_file")
-        if not f or f.filename == "":
-            flash("Seleccioná un archivo válido.")
+        file = request.files.get("excel_file")
+        if not file or file.filename == "":
+            flash("No seleccionaste archivo.")
             return redirect(request.url)
-        fname = secure_filename(f.filename)
-        path = os.path.join(UPLOAD_FOLDER, fname)
-        f.save(path)
 
+        fname = secure_filename(file.filename)
+        path = os.path.join(app.config['UPLOAD_FOLDER'], fname)
+        file.save(path)
+
+        # Generamos un ID único para este procesamiento
         job_id = str(uuid.uuid4())
         # Marcamos el job como “en proceso”
-        jobs[job_id] = {"ready": False}
+        jobs[job_id] = { "ready": False }
+        # Arrancamos el hilo que hace el process_excel
         threading.Thread(target=worker, args=(job_id, path), daemon=True).start()
 
-        # Página que recarga cada 5s en /status/<job_id>
+        # Devolvemos de inmediato la página de “Procesando…”
         return render_template("processing.html", job_id=job_id)
 
+    # GET: muestro tu formulario igual que antes
     return render_template("upload.html")
 
+# --- y añade esta nueva ruta para consultar el estado ---
 @app.route("/status/<job_id>")
 def status(job_id):
     job = jobs.get(job_id)
     if not job:
+        flash("ID de trabajo inválido, por favor vuelve a subir tu archivo.")
         return redirect(url_for("upload_file"))
     if not job["ready"]:
-        # Sigue procesando
+        # Sigue procesando: recarga processing.html
         return render_template("processing.html", job_id=job_id)
-    # Listo: guardamos en data_store y mostramos preview
+
+    # Ya terminó: guardo en data_store y muestro resultado
     data_store["df"] = job["df"]
     data_store["celeste_pozos"] = job["pozos"]
-    return render_template("upload_success.html", preview=job["preview_html"])
+    return render_template("upload_success.html", preview=job["preview"])
 
  
 @app.route("/filter", methods=["GET", "POST"])
