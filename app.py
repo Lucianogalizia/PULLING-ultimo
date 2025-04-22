@@ -1,4 +1,324 @@
 # =============================================================================
+# Importación de Librerías y Configuración Inicial
+# =============================================================================
+from flask import Flask, request, redirect, url_for, render_template, flash
+import pandas as pd
+import numpy as np
+import datetime
+import os
+import re
+import unicodedata
+from openpyxl import load_workbook
+from werkzeug.utils import secure_filename
+from geopy.distance import geodesic
+ 
+# Configuración de la aplicación Flask
+app = Flask(__name__)
+app.secret_key = "super_secret_key"  # Clave secreta para sesiones y flash
+ 
+# Carpeta donde se almacenarán los archivos subidos
+UPLOAD_FOLDER = "uploads"
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+ 
+# Diccionario global para simular el "estado de sesión"
+data_store = {}
+ 
+# =============================================================================
+# Funciones Auxiliares
+# =============================================================================
+def normalize_text(text):
+    """
+    Normaliza el texto:
+      - Convierte a minúsculas.
+      - Elimina acentos.
+      - Elimina espacios innecesarios.
+    """
+    if not isinstance(text, str):
+        return text
+    text = text.strip().lower()
+    # Elimina acentos
+    text = unicodedata.normalize('NFKD', text).encode('ASCII', 'ignore').decode('utf-8')
+    # Reemplaza múltiples espacios por uno solo
+    text = re.sub(r'\s+', ' ', text)
+    return text
+ 
+def process_excel(file_path):
+    """
+    Procesa el archivo Excel subido (hoja "dataset") y realiza lo siguiente:
+      1. Normaliza los nombres de las columnas.
+      2. Ordena de mayor a menor por "Pérdida [m3/d]" y obtiene un preview (20 filas).
+      3. Filtra las filas donde "Plan [Si/No]" sea 1.
+      4. Descarta filas en las que la celda "OBSERVACIONES" esté pintada de rojo (relleno rojo).
+      5. Elimina filas con valores nulos, vacíos o 0 en columnas críticas.
+      6. Elimina filas cuyo valor en la columna "EQUIPO" contenga palabras no deseadas.
+      --> 6.1. **Normaliza la columna POZO** del Excel del usuario para que coincida con el Excel de coordenadas.
+      7. (En lugar de convertir X e Y) Lee un Excel de coordenadas y hace un merge por "POZO"
+         para obtener las columnas GEO_LATITUDE y GEO_LONGITUDE.
+      8. Si algún pozo no se encuentra en el Excel de coordenadas, se avisa al usuario.
+      9. Se conservan y renombran las columnas requeridas, y se agregan PROD_DT y RUBRO.
+    """
+    import pandas as pd
+    import datetime
+    import os
+    import re
+    import unicodedata
+    from openpyxl import load_workbook
+    from geopy.distance import geodesic
+    from difflib import SequenceMatcher
+
+    # ---------------------------
+    # Funciones Auxiliares
+    # ---------------------------
+    def normalize_text(text):
+        if not isinstance(text, str):
+            return text
+        text = text.strip().lower()
+        text = unicodedata.normalize('NFKD', text).encode('ASCII', 'ignore').decode('utf-8')
+        text = re.sub(r'\s+', ' ', text)
+        return text
+
+    def extract_number(s):
+        match = re.search(r'(\d+)', s)
+        if match:
+            return match.group(1)
+        return ""
+
+    def extract_letters(s):
+        # Extrae las letras y las concatena en mayúsculas.
+        letters = re.findall(r'[A-Z]+', s.upper())
+        return "".join(letters)
+
+    def custom_normalize_pozo(user_pozo, coord_list, letter_threshold=0.5):
+        """
+        Dado un valor de pozo del usuario, filtra candidatos de la lista del Excel de coordenadas
+        que tengan exactamente el mismo número; luego elige el que tenga mayor similitud en la parte
+        de letras. Si no hay candidatos, retorna el valor original.
+        """
+        if not isinstance(user_pozo, str):
+            return user_pozo
+        user_pozo = user_pozo.strip()
+        user_number = extract_number(user_pozo)
+        user_letters = extract_letters(user_pozo)
+        
+        # Filtrar candidatos con el mismo número
+        candidates = []
+        for cand in coord_list:
+            cand = cand.strip()
+            cand_number = extract_number(cand)
+            if cand_number == user_number and user_number != "":
+                candidates.append(cand)
+        if not candidates:
+            return user_pozo
+        if len(candidates) == 1:
+            return candidates[0]
+        
+        best_candidate = None
+        best_ratio = 0
+        for cand in candidates:
+            cand_letters = extract_letters(cand)
+            ratio = SequenceMatcher(None, user_letters, cand_letters).ratio()
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_candidate = cand
+        return best_candidate if best_ratio >= letter_threshold else user_pozo
+
+    # ---------------------------
+    # Lectura del Excel principal con openpyxl
+    # ---------------------------
+    wb = load_workbook(file_path, data_only=True)
+    if "dataset" not in wb.sheetnames:
+        raise ValueError("La hoja 'dataset' no se encontró en el archivo.")
+    ws = wb["dataset"]
+
+    header = []
+    col_map = {}
+    # Agregamos un campo extra "CELESTE" para marcar si la celda de POZO está pintada de celeste.
+    for idx, cell in enumerate(ws[1]):
+        val = cell.value if cell.value is not None else ""
+        header.append(val)
+        col_map[idx] = normalize_text(val)
+
+    observaciones_idx = None
+    pozo_idx = None
+    equipo_idx = None
+    for idx, col_name in col_map.items():
+        if "observac" in col_name:
+            observaciones_idx = idx
+        if "pozo" in col_name:
+            pozo_idx = idx
+        if "equipo" in col_name:
+            equipo_idx = idx
+
+    data = []
+    # En lugar de guardar directamente los nombres de pozos celestes, se guarda un indicador en cada fila
+    for row in ws.iter_rows(min_row=2, values_only=False):
+        row_data = {}
+        # Inicialmente no tiene el indicador "CELESTE"
+        row_data["CELESTE"] = False
+
+        # 1) Descartar si OBSERVACIONES está pintada de rojo
+        if observaciones_idx is not None:
+            cell_obs = row[observaciones_idx]
+            if cell_obs.fill and cell_obs.fill.fgColor:
+                fg_obs = cell_obs.fill.fgColor
+                if fg_obs.type == "rgb" and fg_obs.rgb and fg_obs.rgb.upper() == "FFFF0000":
+                    continue
+
+        # 2) Descartar si EQUIPO contiene "B2" o "B3"
+        if equipo_idx is not None:
+            cell_equipo = row[equipo_idx]
+            if cell_equipo.value:
+                valor_equipo = str(cell_equipo.value).lower()
+                if "b2" in valor_equipo or "b3" in valor_equipo:
+                    continue
+
+        # 3) Detectar pozos pintados de celeste (relleno "FF00FFFF")
+        if pozo_idx is not None:
+            cell_pozo = row[pozo_idx]
+            if cell_pozo.fill and cell_pozo.fill.fgColor:
+                fg_pozo = cell_pozo.fill.fgColor
+                if fg_pozo.type == "rgb" and fg_pozo.rgb and fg_pozo.rgb.upper() == "FF00FFFF":
+                    # Marcamos en esta fila que el pozo era celeste
+                    row_data["CELESTE"] = True
+
+        # 4) Construir el diccionario para la fila usando la fila de encabezados
+        for i, cell in enumerate(row):
+            key = header[i]
+            row_data[key] = cell.value
+        data.append(row_data)
+
+    df_main = pd.DataFrame(data)
+
+    # ---------------------------
+    # Normalizar nombres de columna y renombrar según lo esperado
+    # ---------------------------
+    normalized_columns = {col: normalize_text(col) for col in df_main.columns}
+    expected = {
+        "activo": "Activo",
+        "pozo": "POZO",
+        "x": "X",
+        "y": "Y",
+        "perdida [m3/d]": "Pérdida [m3/d]",
+        "plan [si/no]": "Plan [Si/No]",
+        "plan [hs/int]": "Plan [Hs/INT]",
+        "sea": "SEA",
+        "accion": "Acción",
+        "ot": "OT",
+        "icp": "ICP",
+        "requerimientos": "REQUERIMIENTOS",
+        "bateria": "Batería",
+        "oi": "OI",
+        "equipo": "EQUIPO",
+        "observaciones": "OBSERVACIONES"
+    }
+    rename_dict = {}
+    for col in df_main.columns:
+        norm = normalize_text(col)
+        if norm in expected:
+            rename_dict[col] = expected[norm]
+    df_main.rename(columns=rename_dict, inplace=True)
+
+    # ---------------------------
+    # Procesamiento de datos adicionales
+    # ---------------------------
+    if "Pérdida [m3/d]" in df_main.columns:
+        df_main["Pérdida [m3/d]"] = pd.to_numeric(df_main["Pérdida [m3/d]"], errors="coerce")
+        df_main.sort_values(by="Pérdida [m3/d]", ascending=False, inplace=True)
+    preview_df = df_main.head(20)
+
+    if "Plan [Si/No]" in df_main.columns:
+        df_main = df_main[df_main["Plan [Si/No]"] == 1]
+
+    cols_criticas = ["Activo", "POZO", "X", "Y", "Pérdida [m3/d]", "Plan [Si/No]", "Plan [Hs/INT]", "EQUIPO"]
+    for col in cols_criticas:
+        if col in df_main.columns:
+            df_main = df_main[df_main[col].notnull()]
+            df_main = df_main[df_main[col] != 0]
+
+    if "EQUIPO" in df_main.columns:
+        patrones = ["fb", "pesado", "z inyector", "z recupero"]
+        def no_contiene(valor):
+            if not isinstance(valor, str):
+                return True
+            valor_norm = normalize_text(valor)
+            return not any(pat in valor_norm for pat in patrones)
+        df_main = df_main[df_main["EQUIPO"].apply(no_contiene)]
+
+    # ----------------------------------------------------
+    # **NUEVA PARTE: Normalización de la columna POZO**
+    # ----------------------------------------------------
+    # Cargar el Excel de coordenadas (se asume que tiene la columna "POZO")
+    df_coords = pd.read_excel("coordenadas.xlsx", engine="openpyxl")
+    # Extraer la lista de pozos reales del Excel de coordenadas
+    lista_pozos_coords = df_coords["POZO"].dropna().astype(str).tolist()
+    
+    # Creamos una columna temporal para facilitar un merge exacto:
+    df_main["POZO_TMP"] = df_main["POZO"].astype(str).str.strip().str.upper()
+    df_coords["POZO_TMP"] = df_coords["POZO"].astype(str).str.strip().str.upper()
+    
+    # Merge exacto basado en POZO_TMP
+    df_main = pd.merge(
+        df_main,
+        df_coords[["POZO", "POZO_TMP"]],
+        on="POZO_TMP",
+        how="left",
+        suffixes=("", "_coord")
+    )
+    
+    # Para registros sin match exacto, aplicar normalización personalizada.
+    def apply_normalization(row):
+        if pd.isnull(row.get("POZO_coord")):
+            return custom_normalize_pozo(row["POZO"], lista_pozos_coords, letter_threshold=0.5)
+        return row["POZO_coord"]
+    
+    df_main["POZO_NORMALIZADO"] = df_main.apply(apply_normalization, axis=1)
+    
+    # Actualizar la columna POZO con el valor normalizado y descartar columnas temporales
+    df_main["POZO"] = df_main["POZO_NORMALIZADO"]
+    df_main.drop(columns=["POZO_TMP", "POZO_coord", "POZO_NORMALIZADO"], inplace=True)
+    # ----------------------------------------------------
+    
+    # ----------------------------------------------------
+    # Reconstruir la lista de pozos celestes: usar el indicador "CELESTE" de cada fila
+    pozos_celestes = df_main[df_main["CELESTE"] == True]["POZO"].unique().tolist()
+    # ----------------------------------------------------
+    
+    # --- Merge con el Excel de coordenadas para obtener GEO_LATITUDE y GEO_LONGITUDE ---
+    df_coords["GEO_LATITUDE"] = df_coords["GEO_LATITUDE"].astype(str).str.replace(",", ".").astype(float)
+    df_coords["GEO_LONGITUDE"] = df_coords["GEO_LONGITUDE"].astype(str).str.replace(",", ".").astype(float)
+    df_merged = df_main.merge(df_coords[["POZO", "GEO_LATITUDE", "GEO_LONGITUDE"]], on="POZO", how="left")
+    
+    missing_pozos = df_merged[
+        df_merged["GEO_LATITUDE"].isnull() | df_merged["GEO_LONGITUDE"].isnull()
+    ]["POZO"].unique()
+    if len(missing_pozos) > 0:
+        flash(f"Atención: No se encontraron coordenadas para los siguientes pozos: {', '.join(missing_pozos)}")
+        df_merged = df_merged.dropna(subset=["GEO_LATITUDE", "GEO_LONGITUDE"])
+    
+    columnas_requeridas = ["Activo", "POZO", "Pérdida [m3/d]", "Plan [Hs/INT]", "Batería"]
+    df_merged = df_merged[[col for col in columnas_requeridas if col in df_merged.columns] + ["GEO_LATITUDE", "GEO_LONGITUDE"]]
+    df_merged.rename(columns={
+        "Activo": "ZONA",
+        "Pérdida [m3/d]": "NETA [M3/D]",
+        "Plan [Hs/INT]": "TIEMPO PLANIFICADO",
+        "Batería": "BATERÍA"
+    }, inplace=True)
+    
+    df_merged["PROD_DT"] = datetime.date.today().strftime("%Y-%m-%d")
+    df_merged["RUBRO"] = "ESPERA DE TRACTOR"
+    
+    orden_final = ["POZO", "NETA [M3/D]", "PROD_DT", "RUBRO", "GEO_LATITUDE", "GEO_LONGITUDE", "BATERÍA", "ZONA", "TIEMPO PLANIFICADO"]
+    df_merged = df_merged[[col for col in orden_final if col in df_merged.columns]]
+    
+    return df_merged, preview_df, pozos_celestes
+
+
+
+
+ 
+# =============================================================================
 # Rutas de la Aplicación Flask
 # =============================================================================
 @app.route("/")
@@ -363,6 +683,7 @@ def assign():
  
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
