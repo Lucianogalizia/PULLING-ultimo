@@ -1,5 +1,5 @@
 # =============================================================================
-# Importación de Librerías y Configuración Inicial
+# app.py
 # =============================================================================
 from flask import Flask, request, redirect, url_for, render_template, flash
 import pandas as pd
@@ -11,678 +11,331 @@ import unicodedata
 from openpyxl import load_workbook
 from werkzeug.utils import secure_filename
 from geopy.distance import geodesic
- 
+from difflib import SequenceMatcher
+
 # Configuración de la aplicación Flask
 app = Flask(__name__)
-app.secret_key = "super_secret_key"  # Clave secreta para sesiones y flash
- 
-# Carpeta donde se almacenarán los archivos subidos
+app.secret_key = "super_secret_key"
 UPLOAD_FOLDER = "uploads"
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
- 
+
 # Diccionario global para simular el "estado de sesión"
 data_store = {}
- 
+
 # =============================================================================
-# Funciones Auxiliares
+# Funciones Auxiliares Generales
 # =============================================================================
 def normalize_text(text):
-    """
-    Normaliza el texto:
-      - Convierte a minúsculas.
-      - Elimina acentos.
-      - Elimina espacios innecesarios.
-    """
     if not isinstance(text, str):
         return text
     text = text.strip().lower()
-    # Elimina acentos
-    text = unicodedata.normalize('NFKD', text).encode('ASCII', 'ignore').decode('utf-8')
-    # Reemplaza múltiples espacios por uno solo
-    text = re.sub(r'\s+', ' ', text)
-    return text
- 
-def process_excel(file_path):
-    """
-    Procesa el archivo Excel subido (hoja "dataset") y realiza lo siguiente:
-      1. Normaliza los nombres de las columnas.
-      2. Ordena de mayor a menor por "Pérdida [m3/d]" y obtiene un preview (20 filas).
-      3. Filtra las filas donde "Plan [Si/No]" sea 1.
-      4. Descarta filas en las que la celda "OBSERVACIONES" esté pintada de rojo (relleno rojo).
-      5. Elimina filas con valores nulos, vacíos o 0 en columnas críticas.
-      6. Elimina filas cuyo valor en la columna "EQUIPO" contenga palabras no deseadas.
-      --> 6.1. **Normaliza la columna POZO** del Excel del usuario para que coincida con el Excel de coordenadas.
-      7. (En lugar de convertir X e Y) Lee un Excel de coordenadas y hace un merge por "POZO"
-         para obtener las columnas GEO_LATITUDE y GEO_LONGITUDE.
-      8. Si algún pozo no se encuentra en el Excel de coordenadas, se avisa al usuario.
-      9. Se conservan y renombran las columnas requeridas, y se agregan PROD_DT y RUBRO.
-    """
-    import pandas as pd
-    import datetime
-    import os
-    import re
-    import unicodedata
-    from openpyxl import load_workbook
-    from geopy.distance import geodesic
-    from difflib import SequenceMatcher
+    text = unicodedata.normalize('NFKD', text).encode('ASCII','ignore').decode('utf-8')
+    return re.sub(r'\s+', ' ', text)
 
-    # ---------------------------
-    # Funciones Auxiliares
-    # ---------------------------
-    def normalize_text(text):
-        if not isinstance(text, str):
-            return text
-        text = text.strip().lower()
-        text = unicodedata.normalize('NFKD', text).encode('ASCII', 'ignore').decode('utf-8')
-        text = re.sub(r'\s+', ' ', text)
-        return text
+def extract_number(s):
+    m = re.search(r'(\d+)', str(s))
+    return m.group(1) if m else ""
 
-    def extract_number(s):
-        match = re.search(r'(\d+)', s)
-        if match:
-            return match.group(1)
-        return ""
+def extract_letters(s):
+    return "".join(re.findall(r'[A-Z]+', str(s).upper()))
 
-    def extract_letters(s):
-        # Extrae las letras y las concatena en mayúsculas.
-        letters = re.findall(r'[A-Z]+', s.upper())
-        return "".join(letters)
+def custom_normalize_pozo(user_pozo, coord_list, letter_threshold=0.5):
+    if not isinstance(user_pozo, str):
+        return user_pozo
+    user_pozo = user_pozo.strip()
+    num = extract_number(user_pozo)
+    let = extract_letters(user_pozo)
+    candidates = [c for c in coord_list if extract_number(c) == num and num]
+    if not candidates:
+        return user_pozo
+    if len(candidates) == 1:
+        return candidates[0]
+    best, best_ratio = user_pozo, 0
+    for cand in candidates:
+        ratio = SequenceMatcher(None, let, extract_letters(cand)).ratio()
+        if ratio > best_ratio:
+            best_ratio, best = ratio, cand
+    return best if best_ratio >= letter_threshold else user_pozo
 
-    def custom_normalize_pozo(user_pozo, coord_list, letter_threshold=0.5):
-        """
-        Dado un valor de pozo del usuario, filtra candidatos de la lista del Excel de coordenadas
-        que tengan exactamente el mismo número; luego elige el que tenga mayor similitud en la parte
-        de letras. Si no hay candidatos, retorna el valor original.
-        """
-        if not isinstance(user_pozo, str):
-            return user_pozo
-        user_pozo = user_pozo.strip()
-        user_number = extract_number(user_pozo)
-        user_letters = extract_letters(user_pozo)
-        
-        # Filtrar candidatos con el mismo número
-        candidates = []
-        for cand in coord_list:
-            cand = cand.strip()
-            cand_number = extract_number(cand)
-            if cand_number == user_number and user_number != "":
-                candidates.append(cand)
-        if not candidates:
-            return user_pozo
-        if len(candidates) == 1:
-            return candidates[0]
-        
-        best_candidate = None
-        best_ratio = 0
-        for cand in candidates:
-            cand_letters = extract_letters(cand)
-            ratio = SequenceMatcher(None, user_letters, cand_letters).ratio()
-            if ratio > best_ratio:
-                best_ratio = ratio
-                best_candidate = cand
-        return best_candidate if best_ratio >= letter_threshold else user_pozo
-
-    # ---------------------------
-    # Lectura del Excel principal con openpyxl
-    # ---------------------------
+# =============================================================================
+# 1️⃣ Paso 1: Carga y marcado inicial
+# =============================================================================
+def step1_load_and_mark(file_path):
     wb = load_workbook(file_path, data_only=True)
     if "dataset" not in wb.sheetnames:
-        raise ValueError("La hoja 'dataset' no se encontró en el archivo.")
+        raise ValueError("Hoja 'dataset' no encontrada.")
     ws = wb["dataset"]
 
-    header = []
-    col_map = {}
-    # Agregamos un campo extra "CELESTE" para marcar si la celda de POZO está pintada de celeste.
-    for idx, cell in enumerate(ws[1]):
-        val = cell.value if cell.value is not None else ""
-        header.append(val)
-        col_map[idx] = normalize_text(val)
+    header = [cell.value or "" for cell in ws[1]]
+    col_map = {i: normalize_text(header[i]) for i in range(len(header))}
+    obs_idx    = next((i for i,cn in col_map.items() if "observac" in cn), None)
+    pozo_idx   = next((i for i,cn in col_map.items() if "pozo"      in cn), None)
+    equipo_idx = next((i for i,cn in col_map.items() if "equipo"    in cn), None)
 
-    observaciones_idx = None
-    pozo_idx = None
-    equipo_idx = None
-    for idx, col_name in col_map.items():
-        if "observac" in col_name:
-            observaciones_idx = idx
-        if "pozo" in col_name:
-            pozo_idx = idx
-        if "equipo" in col_name:
-            equipo_idx = idx
-
-    data = []
-    # En lugar de guardar directamente los nombres de pozos celestes, se guarda un indicador en cada fila
+    rows = []
     for row in ws.iter_rows(min_row=2, values_only=False):
-        row_data = {}
-        # Inicialmente no tiene el indicador "CELESTE"
-        row_data["CELESTE"] = False
-
-        # 1) Descartar si OBSERVACIONES está pintada de rojo
-        if observaciones_idx is not None:
-            cell_obs = row[observaciones_idx]
-            if cell_obs.fill and cell_obs.fill.fgColor:
-                fg_obs = cell_obs.fill.fgColor
-                if fg_obs.type == "rgb" and fg_obs.rgb and fg_obs.rgb.upper() == "FFFF0000":
-                    continue
-
-        # 2) Descartar si EQUIPO contiene "B2" o "B3"
+        row_data = {"CELESTE": False}
+        # 1) Descarta rojos en OBSERVACIONES
+        if obs_idx is not None:
+            c = row[obs_idx]
+            if (c.fill and c.fill.fgColor
+               and c.fill.fgColor.type=="rgb"
+               and c.fill.fgColor.rgb.upper()=="FFFF0000"):
+                continue
+        # 2) Filtra EQUIPO b2/b3
         if equipo_idx is not None:
-            cell_equipo = row[equipo_idx]
-            if cell_equipo.value:
-                valor_equipo = str(cell_equipo.value).lower()
-                if "b2" in valor_equipo or "b3" in valor_equipo:
-                    continue
-
-        # 3) Detectar pozos pintados de celeste (relleno "FF00FFFF")
+            c = row[equipo_idx]
+            if c.value and any(p in str(c.value).lower() for p in ("b2","b3")):
+                continue
+        # 3) Marca pozos celestes
         if pozo_idx is not None:
-            cell_pozo = row[pozo_idx]
-            if cell_pozo.fill and cell_pozo.fill.fgColor:
-                fg_pozo = cell_pozo.fill.fgColor
-                if fg_pozo.type == "rgb" and fg_pozo.rgb and fg_pozo.rgb.upper() == "FF00FFFF":
-                    # Marcamos en esta fila que el pozo era celeste
-                    row_data["CELESTE"] = True
-
-        # 4) Construir el diccionario para la fila usando la fila de encabezados
+            c = row[pozo_idx]
+            if (c.fill and c.fill.fgColor
+               and c.fill.fgColor.type=="rgb"
+               and c.fill.fgColor.rgb.upper()=="FF00FFFF"):
+                row_data["CELESTE"] = True
+        # 4) Recolecta valores
         for i, cell in enumerate(row):
-            key = header[i]
-            row_data[key] = cell.value
-        data.append(row_data)
+            row_data[header[i]] = cell.value
+        rows.append(row_data)
 
-    df_main = pd.DataFrame(data)
+    df1 = pd.DataFrame(rows)
+    preview1 = df1.head(20)
+    return df1, preview1
 
-    # ---------------------------
-    # Normalizar nombres de columna y renombrar según lo esperado
-    # ---------------------------
-    normalized_columns = {col: normalize_text(col) for col in df_main.columns}
-    expected = {
-        "activo": "Activo",
-        "pozo": "POZO",
-        "x": "X",
-        "y": "Y",
-        "perdida [m3/d]": "Pérdida [m3/d]",
-        "plan [si/no]": "Plan [Si/No]",
-        "plan [hs/int]": "Plan [Hs/INT]",
-        "sea": "SEA",
-        "accion": "Acción",
-        "ot": "OT",
-        "icp": "ICP",
-        "requerimientos": "REQUERIMIENTOS",
-        "bateria": "Batería",
-        "oi": "OI",
-        "equipo": "EQUIPO",
-        "observaciones": "OBSERVACIONES"
-    }
-    rename_dict = {}
-    for col in df_main.columns:
-        norm = normalize_text(col)
-        if norm in expected:
-            rename_dict[col] = expected[norm]
-    df_main.rename(columns=rename_dict, inplace=True)
+# =============================================================================
+# 2️⃣ Paso 2: Filtros básicos y limpieza
+# =============================================================================
+def step2_basic_filters(df1):
+    df2 = df1.copy()
+    if "Pérdida [m3/d]" in df2.columns:
+        df2["Pérdida [m3/d]"] = pd.to_numeric(df2["Pérdida [m3/d]"], errors="coerce")
+        df2.sort_values("Pérdida [m3/d]", ascending=False, inplace=True)
+    if "Plan [Si/No]" in df2.columns:
+        df2 = df2[df2["Plan [Si/No]"] == 1]
 
-    # ---------------------------
-    # Procesamiento de datos adicionales
-    # ---------------------------
-    if "Pérdida [m3/d]" in df_main.columns:
-        df_main["Pérdida [m3/d]"] = pd.to_numeric(df_main["Pérdida [m3/d]"], errors="coerce")
-        df_main.sort_values(by="Pérdida [m3/d]", ascending=False, inplace=True)
-    preview_df = df_main.head(20)
+    critical = ["Activo","POZO","X","Y","Pérdida [m3/d]","Plan [Si/No]","Plan [Hs/INT]","EQUIPO"]
+    for c in critical:
+        if c in df2.columns:
+            df2 = df2[df2[c].notnull() & (df2[c] != 0)]
 
-    if "Plan [Si/No]" in df_main.columns:
-        df_main = df_main[df_main["Plan [Si/No]"] == 1]
+    if "EQUIPO" in df2.columns:
+        df2 = df2[df2["EQUIPO"].apply(lambda v: True 
+            if not isinstance(v,str) 
+            else not any(p in normalize_text(v) for p in ("fb","pesado","z inyector","z recupero")))]
 
-    cols_criticas = ["Activo", "POZO", "X", "Y", "Pérdida [m3/d]", "Plan [Si/No]", "Plan [Hs/INT]", "EQUIPO"]
-    for col in cols_criticas:
-        if col in df_main.columns:
-            df_main = df_main[df_main[col].notnull()]
-            df_main = df_main[df_main[col] != 0]
+    preview2 = df2.head(20)
+    return df2, preview2
 
-    if "EQUIPO" in df_main.columns:
-        patrones = ["fb", "pesado", "z inyector", "z recupero"]
-        def no_contiene(valor):
-            if not isinstance(valor, str):
-                return True
-            valor_norm = normalize_text(valor)
-            return not any(pat in valor_norm for pat in patrones)
-        df_main = df_main[df_main["EQUIPO"].apply(no_contiene)]
+# =============================================================================
+# 3️⃣ Paso 3: Normalización de POZO
+# =============================================================================
+def step3_normalize_pozos(df2):
+    df3 = df2.copy()
+    coords = pd.read_excel("coordenadas.xlsx", engine="openpyxl")
+    coords["POZO_TMP"] = coords["POZO"].astype(str).str.strip().str.upper()
+    coord_list = coords["POZO_TMP"].tolist()
 
-    # ----------------------------------------------------
-    # **NUEVA PARTE: Normalización de la columna POZO**
-    # ----------------------------------------------------
-    # Cargar el Excel de coordenadas (se asume que tiene la columna "POZO")
-    df_coords = pd.read_excel("coordenadas.xlsx", engine="openpyxl")
-    # Extraer la lista de pozos reales del Excel de coordenadas
-    lista_pozos_coords = df_coords["POZO"].dropna().astype(str).tolist()
-    
-    # Creamos una columna temporal para facilitar un merge exacto:
-    df_main["POZO_TMP"] = df_main["POZO"].astype(str).str.strip().str.upper()
-    df_coords["POZO_TMP"] = df_coords["POZO"].astype(str).str.strip().str.upper()
-    
-    # Merge exacto basado en POZO_TMP
-    df_main = pd.merge(
-        df_main,
-        df_coords[["POZO", "POZO_TMP"]],
-        on="POZO_TMP",
-        how="left",
-        suffixes=("", "_coord")
+    df3["POZO_TMP"] = df3["POZO"].astype(str).str.strip().str.upper()
+    merged = df3.merge(coords[["POZO_TMP","POZO"]], on="POZO_TMP", how="left", suffixes=("","_coord"))
+    merged["POZO"] = merged.apply(
+        lambda r: r["POZO_coord"]
+                  if pd.notnull(r["POZO_coord"])
+                  else custom_normalize_pozo(r["POZO"], coord_list),
+        axis=1
     )
-    
-    # Para registros sin match exacto, aplicar normalización personalizada.
-    def apply_normalization(row):
-        if pd.isnull(row.get("POZO_coord")):
-            return custom_normalize_pozo(row["POZO"], lista_pozos_coords, letter_threshold=0.5)
-        return row["POZO_coord"]
-    
-    df_main["POZO_NORMALIZADO"] = df_main.apply(apply_normalization, axis=1)
-    
-    # Actualizar la columna POZO con el valor normalizado y descartar columnas temporales
-    df_main["POZO"] = df_main["POZO_NORMALIZADO"]
-    df_main.drop(columns=["POZO_TMP", "POZO_coord", "POZO_NORMALIZADO"], inplace=True)
-    # ----------------------------------------------------
-    
-    # ----------------------------------------------------
-    # Reconstruir la lista de pozos celestes: usar el indicador "CELESTE" de cada fila
-    pozos_celestes = df_main[df_main["CELESTE"] == True]["POZO"].unique().tolist()
-    # ----------------------------------------------------
-    
-    # --- Merge con el Excel de coordenadas para obtener GEO_LATITUDE y GEO_LONGITUDE ---
-    df_coords["GEO_LATITUDE"] = df_coords["GEO_LATITUDE"].astype(str).str.replace(",", ".").astype(float)
-    df_coords["GEO_LONGITUDE"] = df_coords["GEO_LONGITUDE"].astype(str).str.replace(",", ".").astype(float)
-    df_merged = df_main.merge(df_coords[["POZO", "GEO_LATITUDE", "GEO_LONGITUDE"]], on="POZO", how="left")
-    
-    missing_pozos = df_merged[
-        df_merged["GEO_LATITUDE"].isnull() | df_merged["GEO_LONGITUDE"].isnull()
-    ]["POZO"].unique()
-    if len(missing_pozos) > 0:
-        flash(f"Atención: No se encontraron coordenadas para los siguientes pozos: {', '.join(missing_pozos)}")
-        df_merged = df_merged.dropna(subset=["GEO_LATITUDE", "GEO_LONGITUDE"])
-    
-    columnas_requeridas = ["Activo", "POZO", "Pérdida [m3/d]", "Plan [Hs/INT]", "Batería"]
-    df_merged = df_merged[[col for col in columnas_requeridas if col in df_merged.columns] + ["GEO_LATITUDE", "GEO_LONGITUDE"]]
-    df_merged.rename(columns={
-        "Activo": "ZONA",
-        "Pérdida [m3/d]": "NETA [M3/D]",
-        "Plan [Hs/INT]": "TIEMPO PLANIFICADO",
-        "Batería": "BATERÍA"
-    }, inplace=True)
-    
-    df_merged["PROD_DT"] = datetime.date.today().strftime("%Y-%m-%d")
-    df_merged["RUBRO"] = "ESPERA DE TRACTOR"
-    
-    orden_final = ["POZO", "NETA [M3/D]", "PROD_DT", "RUBRO", "GEO_LATITUDE", "GEO_LONGITUDE", "BATERÍA", "ZONA", "TIEMPO PLANIFICADO"]
-    df_merged = df_merged[[col for col in orden_final if col in df_merged.columns]]
-    
-    return df_merged, preview_df, pozos_celestes
+    df3 = merged.drop(columns=["POZO_TMP","POZO_coord"])
+    preview3 = df3.head(20)
+    return df3, preview3
 
+# =============================================================================
+# 4️⃣ Paso 4: Merge de coordenadas
+# =============================================================================
+def step4_merge_coords(df3):
+    coords = pd.read_excel("coordenadas.xlsx", engine="openpyxl")
+    coords["GEO_LATITUDE"]  = coords["GEO_LATITUDE"].astype(str).str.replace(",",".").astype(float)
+    coords["GEO_LONGITUDE"] = coords["GEO_LONGITUDE"].astype(str).str.replace(",",".").astype(float)
 
+    df4 = df3.merge(coords[["POZO","GEO_LATITUDE","GEO_LONGITUDE"]], on="POZO", how="left")
+    missing = df4[df4["GEO_LATITUDE"].isnull() | df4["GEO_LONGITUDE"].isnull()]["POZO"].unique().tolist()
+    df4 = df4.dropna(subset=["GEO_LATITUDE","GEO_LONGITUDE"])
+    return df4, missing
 
+# =============================================================================
+# 5️⃣ Paso 5: Finalizar y renombrar
+# =============================================================================
+def step5_finalize(df4):
+    df5 = df4.rename(columns={
+        "Activo":"ZONA",
+        "Pérdida [m3/d]":"NETA [M3/D]",
+        "Plan [Hs/INT]":"TIEMPO PLANIFICADO",
+        "Batería":"BATERÍA"
+    }).copy()
+    df5["PROD_DT"] = datetime.date.today().strftime("%Y-%m-%d")
+    df5["RUBRO"]   = "ESPERA DE TRACTOR"
+    order = ["POZO","NETA [M3/D]","PROD_DT","RUBRO",
+             "GEO_LATITUDE","GEO_LONGITUDE","BATERÍA","ZONA","TIEMPO PLANIFICADO"]
+    return df5[[c for c in order if c in df5.columns]]
 
- 
+# =============================================================================
+# Orquestador: reemplaza al antiguo process_excel
+# =============================================================================
+def process_excel(file_path):
+    df1, preview1   = step1_load_and_mark(file_path)
+    df2, _          = step2_basic_filters(df1)
+    df3, _          = step3_normalize_pozos(df2)
+    df4, missing    = step4_merge_coords(df3)
+    df_final        = step5_finalize(df4)
+    pozos_celestes  = df1[df1["CELESTE"]==True]["POZO"].unique().tolist()
+    return df_final, preview1, pozos_celestes
+
 # =============================================================================
 # Rutas de la Aplicación Flask
 # =============================================================================
 @app.route("/")
 def index():
     return redirect(url_for("upload_file"))
- 
-@app.route("/upload", methods=["GET", "POST"])
+
+@app.route("/upload", methods=["GET","POST"])
 def upload_file():
-    """
-    Ruta para subir y procesar el archivo Excel.
-    1. Valida que el archivo exista en la solicitud y tenga un nombre.
-    2. Guarda el archivo en la carpeta UPLOAD_FOLDER.
-    3. Llama a process_excel(filepath), que devuelve:
-       - df_clean: DataFrame final limpio.
-       - preview_df: DataFrame con preview (20 filas).
-       - pozos_celestes: Lista de pozos que están pintados de celeste.
-    4. Almacena df_clean y pozos_celestes en data_store para usarlos posteriormente.
-    5. Muestra un mensaje de éxito y un preview de las primeras 20 filas.
-    """
     if request.method == "POST":
-        # Verificar si se adjuntó el archivo
         if "excel_file" not in request.files:
             flash("No se encontró el archivo en la solicitud.")
             return redirect(request.url)
-
         file = request.files["excel_file"]
-        # Verificar si el nombre del archivo no está vacío
         if file.filename == "":
             flash("No se seleccionó ningún archivo.")
             return redirect(request.url)
-
-        # Guardar el archivo en la carpeta configurada
         filename = secure_filename(file.filename)
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        file.save(filepath)
-
-        # Procesar el Excel dentro de un bloque try-except
+        path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(path)
         try:
-            # Ahora process_excel devuelve 3 elementos
-            df_clean, preview_df, pozos_celestes = process_excel(filepath)
+            df_clean, preview_df, pozos_celestes = process_excel(path)
         except Exception as e:
             flash(f"Error al procesar el Excel: {e}")
             return redirect(request.url)
-
-        # Almacenar los resultados en data_store (estado de sesión simulado)
-        data_store["df"] = df_clean
+        data_store["df"]           = df_clean
         data_store["celeste_pozos"] = pozos_celestes
-
-        # Notificar y renderizar la vista de éxito con un preview
-        flash("Archivo procesado exitosamente. A continuación se muestra un preview (20 filas).")
-        preview_html = preview_df.to_html(classes="table table-striped", index=False)
-        return render_template("upload_success.html", preview=preview_html)
-
-    # Si es GET, mostrar el formulario de subida
+        flash("Archivo procesado exitosamente. A continuación, el preview.")
+        return render_template("upload_success.html",
+                               preview=preview_df.to_html(classes="table table-striped", index=False))
     return render_template("upload.html")
- 
-@app.route("/filter", methods=["GET", "POST"])
+
+@app.route("/filter", methods=["GET","POST"])
 def filter_zonas():
     if "df" not in data_store:
         flash("Debes subir un archivo Excel primero.")
         return redirect(url_for("upload_file"))
- 
     df = data_store["df"]
-    zonas_disponibles = sorted(df["ZONA"].unique().tolist())
- 
+    zonas = sorted(df["ZONA"].unique().tolist())
     if request.method == "POST":
-        zonas_seleccionadas = request.form.getlist("zonas")
-        if not zonas_seleccionadas:
+        sel = request.form.getlist("zonas")
+        if not sel:
             flash("Debes seleccionar al menos una zona.")
             return redirect(request.url)
- 
-        pulling_count = request.form.get("pulling_count", "3")
         try:
-            pulling_count = int(pulling_count)
-        except ValueError:
-            pulling_count = 3
- 
-        df_filtrado = df[df["ZONA"].isin(zonas_seleccionadas)].copy()
-        data_store["df_filtrado"] = df_filtrado
- 
-        pozos = sorted(df_filtrado["POZO"].unique().tolist())
-        data_store["pozos_disponibles"] = pozos
-        data_store["pulling_count"] = pulling_count
- 
-        flash(f"Zonas seleccionadas: {', '.join(zonas_seleccionadas)} | Pullings: {pulling_count}")
+            cnt = int(request.form.get("pulling_count", 3))
+        except:
+            cnt = 3
+        df_f = df[df["ZONA"].isin(sel)].copy()
+        data_store["df_filtrado"]       = df_f
+        data_store["pozos_disponibles"] = sorted(df_f["POZO"].tolist())
+        data_store["pulling_count"]     = cnt
+        flash(f"Zonas: {', '.join(sel)} | Pullings: {cnt}")
         return redirect(url_for("select_pulling"))
- 
-    checkbox_html = ""
-    for zona in zonas_disponibles:
-        checkbox_html += f'<input type="checkbox" name="zonas" value="{zona}"> {zona}<br>'
- 
+    checkbox_html = "".join(f'<input type="checkbox" name="zonas" value="{z}"> {z}<br>' for z in zonas)
     return render_template("filter_zonas.html", checkbox_html=checkbox_html)
- 
-@app.route("/select_pulling", methods=["GET", "POST"])
+
+@app.route("/select_pulling", methods=["GET","POST"])
 def select_pulling():
     if "df_filtrado" not in data_store:
         flash("Debes filtrar las zonas primero.")
         return redirect(url_for("filter_zonas"))
-
-    df_filtrado = data_store["df_filtrado"]
-    pozos_disponibles = sorted(df_filtrado["POZO"].unique().tolist())
-    pulling_count = data_store.get("pulling_count", 3)
-    
-    # Recuperamos la lista de pozos pintados de celeste
-    pozos_celestes = data_store.get("celeste_pozos", [])
-
+    df_f        = data_store["df_filtrado"]
+    disponibles = data_store["pozos_disponibles"]
+    cnt         = data_store["pulling_count"]
+    celestes    = data_store["celeste_pozos"]
     if request.method == "POST":
-        # Aquí se recogen los pozos seleccionados en el formulario
         pulling_data = {}
-        seleccionados = []
-        for i in range(1, pulling_count + 1):
-            pozo = request.form.get(f"pulling_pozo_{i}")
-            pulling_data[f"Pulling {i}"] = {
-                "pozo": pozo,
-                "tiempo_restante": 0.0
-            }
-            seleccionados.append(pozo)
-
-        # Validaciones, etc.
-        if len(seleccionados) != len(set(seleccionados)):
-            flash("Error: No puedes seleccionar el mismo pozo para más de un pulling.")
+        usados = []
+        for i in range(1, cnt+1):
+            p = request.form.get(f"pulling_pozo_{i}")
+            pulling_data[f"Pulling {i}"] = {"pozo": p, "tiempo_restante": 0.0}
+            usados.append(p)
+        if len(usados) != len(set(usados)):
+            flash("No puedes repetir pozos.")
             return redirect(request.url)
-
-        data_store["pulling_data"] = pulling_data
-
-        # Quitamos los pozos seleccionados de la lista total
-        todos_pozos = sorted(df_filtrado["POZO"].unique().tolist())
-        data_store["pozos_disponibles"] = [p for p in todos_pozos if p not in seleccionados]
-
-        flash("Selección de Pulling confirmada.")
+        data_store["pulling_data"]      = pulling_data
+        data_store["pozos_disponibles"] = [p for p in disponibles if p not in usados]
+        flash("Pullings confirmados.")
         return redirect(url_for("assign"))
-
-    # Construimos el formulario en HTML dinámicamente,
-    # usando la lista de pozos disponibles y pre-seleccionando los celestes.
     form_html = ""
-    for i in range(1, pulling_count + 1):
-        # Determinamos cuál pozo celeste (si existe) le toca a este Pulling
-        # i.e., si i=1 -> pozos_celestes[0], i=2 -> pozos_celestes[1], etc.
-        default_pozo = None
-        if (i - 1) < len(pozos_celestes):
-            default_pozo = pozos_celestes[i - 1]
-
-        # Construimos las opciones del <select>
-        select_options = ""
-        for pozo in pozos_disponibles:
-            if pozo == default_pozo:
-                select_options += f'<option value="{pozo}" selected>{pozo}</option>'
-            else:
-                select_options += f'<option value="{pozo}">{pozo}</option>'
-
-        form_html += f"""
-        <h4>Pulling {i}</h4>
-        <label>Pozo para Pulling {i}:</label>
-        <select name="pulling_pozo_{i}" class="form-select w-50">
-          {select_options}
-        </select>
-        <hr>
-        """
-
+    for i in range(1, cnt+1):
+        default = celestes[i-1] if i-1 < len(celestes) else None
+        opts = "".join(f'<option value="{p}"{" selected" if p==default else ""}>{p}</option>' for p in disponibles)
+        form_html += f"<h4>Pulling {i}</h4><select name='pulling_pozo_{i}'>{opts}</select><hr>"
     return render_template("select_pulling.html", form_html=form_html)
- 
-# Nueva ruta para la asignación
+
 @app.route("/assign", methods=["GET"])
 def assign():
     if "pulling_data" not in data_store:
-        flash("Debes seleccionar los pozos para pulling primero.")
+        flash("Completa Pulling primero.")
         return redirect(url_for("select_pulling"))
- 
-    df = data_store["df"]
-    pulling_data = data_store["pulling_data"]
- 
-    # Lista de tuplas (pulling_name, {"pozo": <>, "tiempo_restante": <>})
-    pulling_lista = list(pulling_data.items())
-    pozos_ocupados = set()
- 
-    # ----------------------
-    # 1. Funciones auxiliares
-    # ----------------------
-    def calcular_coeficiente(pozo_referencia, pozo_candidato):
-        """
-        Calcula coeficiente = NETA / (TIEMPO_PLAN + 0.5*distancia)
-        Retorna (coeficiente, distancia).
-        """
-        registro_ref = df[df["POZO"] == pozo_referencia].iloc[0]
-        registro_cand = df[df["POZO"] == pozo_candidato].iloc[0]
-        distancia = geodesic(
-            (registro_ref["GEO_LATITUDE"], registro_ref["GEO_LONGITUDE"]),
-            (registro_cand["GEO_LATITUDE"], registro_cand["GEO_LONGITUDE"])
-        ).kilometers
-        neta = registro_cand["NETA [M3/D]"]
-        tiempo_plan = registro_cand["TIEMPO PLANIFICADO"]
-        denominador = (tiempo_plan + 0.5 * distancia)
-        coeficiente = neta / denominador if denominador != 0 else 0
-        return coeficiente, distancia
- 
-    def asignar_pozos(pulling_asignaciones, nivel):
-        """
-        Asigna pozos para cada pulling según el nivel (N+1, N+2, N+3).
-        Toma los pozos no asignados y selecciona el "mejor candidato" según el coeficiente.
-        """
-        no_asignados = [p for p in data_store["pozos_disponibles"] if p not in pozos_ocupados]
-        for pulling, pdata in pulling_lista:
-            # Si ya tiene asignados, usamos el último pozo; sino usamos el pozo original
-            pozo_referencia = pulling_asignaciones[pulling][-1][0] if pulling_asignaciones[pulling] else pdata["pozo"]
-            candidatos = []
-            for pozo in no_asignados:
-                coef, dist = calcular_coeficiente(pozo_referencia, pozo)
-                candidatos.append((pozo, coef, dist))
-            # Ordenar desc. por coef y asc. por distancia
-            candidatos.sort(key=lambda x: (-x[1], x[2]))
- 
-            if candidatos:
-                mejor_candidato = candidatos[0]
-                pulling_asignaciones[pulling].append(mejor_candidato)
-                pozos_ocupados.add(mejor_candidato[0])
-                no_asignados.remove(mejor_candidato[0])
-            else:
-                flash(f"⚠️ No hay pozos disponibles para asignar como {nivel} en {pulling}.")
-        return pulling_asignaciones
- 
-    # ----------------------
-    # 2. Asignaciones (N+1, N+2, N+3)
-    # ----------------------
-    pulling_asignaciones = {pulling: [] for pulling, _ in pulling_lista}
-    pulling_asignaciones = asignar_pozos(pulling_asignaciones, "N+1")
-    pulling_asignaciones = asignar_pozos(pulling_asignaciones, "N+2")
-    pulling_asignaciones = asignar_pozos(pulling_asignaciones, "N+3")
- 
-    # ----------------------
-    # 3. Construcción de la Matriz de Prioridad
-    # ----------------------
-    matriz_prioridad = []
- 
-    for pulling, pdata in pulling_lista:
-        pozo_actual = pdata["pozo"]
-        registro_actual = df[df["POZO"] == pozo_actual].iloc[0]
-        neta_actual = registro_actual["NETA [M3/D]"]
-        tiempo_restante = pdata["tiempo_restante"]
- 
-        # Obtenemos hasta 3 pozos (N+1, N+2, N+3)
-        seleccionados = pulling_asignaciones.get(pulling, [])[:3]
-        # Si no hay suficientes pozos, rellenamos con N/A
-        while len(seleccionados) < 3:
-            seleccionados.append(("N/A", 1, 1))
- 
-        # Coeficiente del pozo actual
-        coeficiente_actual = 0
-        if tiempo_restante > 0:
-            coeficiente_actual = neta_actual / tiempo_restante
- 
-        # ----------------------
-        # 3.1 Obtener info de N+1, N+2, N+3 (pozo, neta, coef, dist)
-        # ----------------------
-        # Función interna para buscar NETA en df
-        def get_neta(pozo):
-            if pozo == "N/A":
-                return 0
-            row = df[df["POZO"] == pozo]
-            if not row.empty:
-                return row["NETA [M3/D]"].iloc[0]
-            return 0
- 
-        # N+1
-        pozo_n1, coef_n1, dist_n1 = seleccionados[0]
-        neta_n1 = get_neta(pozo_n1)
-        # Se usa para recomendación
-        registro_n1 = df[df["POZO"] == pozo_n1]
-        if not registro_n1.empty:
-            tiempo_planificado_n1 = registro_n1["TIEMPO PLANIFICADO"].iloc[0]
-        else:
-            tiempo_planificado_n1 = 1
-        # Coef N+1 para recomendación
-        denom_n1 = (0.5 * dist_n1) + tiempo_planificado_n1
-        coeficiente_n1 = neta_n1 / denom_n1 if denom_n1 != 0 else 0
- 
-        # N+2
-        pozo_n2, coef_n2, dist_n2 = seleccionados[1]
-        neta_n2 = get_neta(pozo_n2)
- 
-        # N+3
-        pozo_n3, coef_n3, dist_n3 = seleccionados[2]
-        neta_n3 = get_neta(pozo_n3)
- 
-        # ----------------------
-        # 3.2 Generar Recomendación
-        # ----------------------
-        #if coeficiente_actual < coeficiente_n1:
-            #recomendacion = "Abandonar pozo actual y moverse al N+1"
-        #else:
-            #recomendacion = "Continuar en pozo actual"
- 
-        # ----------------------
-        # 3.3 Agregar fila a la matriz
-        # ----------------------
-        matriz_prioridad.append([
-            pulling,
-            pozo_actual,
-            neta_actual,
-            tiempo_restante,
-            pozo_n1,
-            neta_n1,
-            coef_n1,
-            dist_n1,
-            pozo_n2,
-            neta_n2,
-            coef_n2,
-            dist_n2,
-            pozo_n3,
-            neta_n3,
-            coef_n3,
-            dist_n3
-            #recomendacion
-        ])
- 
-    # ----------------------
-    # 4. Crear DataFrame con las nuevas columnas
-    # ----------------------
-    columns = [
-        "Pulling",
-        "Pozo Actual",
-        "Neta Actual",
-        "Tiempo Restante (h)",
-        "N+1",
-        "Neta N+1",
-        "Coeficiente N+1",
-        "Distancia N+1 (km)",
-        "N+2",
-        "Neta N+2",
-        "Coeficiente N+2",
-        "Distancia N+2 (km)",
-        "N+3",
-        "Neta N+3",
-        "Coeficiente N+3",
-        "Distancia N+3 (km)"
-        #"Recomendación"
-    ]
-    df_prioridad = pd.DataFrame(matriz_prioridad, columns=columns)
- 
-    def highlight_reco(val):
-        if "Abandonar" in val:
-            return "color: red; font-weight: bold;"
-        else:
-            return "color: green; font-weight: bold;"
- 
-    df_styled = (df_prioridad.style
-                 .hide_index()
-                 .set_properties(**{"text-align": "center", "white-space": "nowrap"})
-                 .format(precision=2)
-                 .set_table_styles([
-                     {"selector": "th", "props": [("background-color", "#f8f9fa"), 
-                                                    ("color", "#333"), 
-                                                    ("font-weight", "bold"), 
-                                                    ("text-align", "center")]},
-                     {"selector": "td", "props": [("padding", "8px")]},
-                     {"selector": "tbody tr:nth-child(even)", "props": [("background-color", "#f2f2f2")]}
-                 ])
-                 #.applymap(highlight_reco, subset=["Recomendación"])
-                )
-    table_html = df_styled.render()
-    flash("Proceso de asignación completado.")
+    df   = data_store["df"]
+    pdat = data_store["pulling_data"]
+    plst = list(pdat.items())
+    occupied = set()
+
+    def coef(ref, cand):
+        r1 = df[df["POZO"]==ref].iloc[0]
+        r2 = df[df["POZO"]==cand].iloc[0]
+        d  = geodesic((r1["GEO_LATITUDE"],r1["GEO_LONGITUDE"]),
+                      (r2["GEO_LATITUDE"],r2["GEO_LONGITUDE"])).kilometers
+        n  = r2["NETA [M3/D]"]; t = r2["TIEMPO PLANIFICADO"]
+        den = t + 0.5*d
+        return (n/den if den else 0), d
+
+    def asign(a):
+        avail = data_store["pozos_disponibles"]
+        for pull,_ in plst:
+            ref = a[pull][-1][0] if a[pull] else pdat[pull]["pozo"]
+            cands = [(p,*coef(ref,p)) for p in avail if p not in occupied]
+            cands.sort(key=lambda x:(-x[1],x[2]))
+            if cands:
+                best = cands[0]
+                a[pull].append(best)
+                occupied.add(best[0])
+        return a
+
+    asigs = {p:[] for p,_ in plst}
+    for _ in ("N+1","N+2","N+3"):
+        asigs = asign(asigs)
+
+    matrix = []
+    for pull,_ in plst:
+        po_act = pdat[pull]["pozo"]
+        n_act  = df[df["POZO"]==po_act]["NETA [M3/D]"].iloc[0]
+        tr     = pdat[pull]["tiempo_restante"]
+        sels   = asigs[pull][:3] + [("N/A",0,0)]*3
+        row    = [pull, po_act, n_act, tr]
+        for p,cf,d in sels[:3]:
+            n = df[df["POZO"]==p]["NETA [M3/D]"].iloc[0] if p!="N/A" else 0
+            row += [p,n,cf,d]
+        matrix.append(row)
+
+    cols = ["Pulling","Pozo Actual","Neta Actual","Tiempo Restante (h)",
+            "N+1","Neta N+1","Coef N+1","Dist N+1 (km)",
+            "N+2","Neta N+2","Coef N+2","Dist N+2 (km)",
+            "N+3","Neta N+3","Coef N+3","Dist N+3 (km)"]
+    dfp = pd.DataFrame(matrix, columns=cols)
+    table_html = dfp.style.hide_index().format(precision=2).render()
+    flash("Asignación completada.")
     return render_template("assign_result.html", table=table_html)
- 
+
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
