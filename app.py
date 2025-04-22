@@ -1,7 +1,7 @@
 # =============================================================================
 # Importación de Librerías y Configuración Inicial
 # =============================================================================
-from flask import Flask, request, redirect, url_for, render_template, flash, session, jsonify
+from flask import Flask, request, redirect, url_for, render_template, flash
 import pandas as pd
 import numpy as np
 import datetime
@@ -11,21 +11,16 @@ import unicodedata
 from openpyxl import load_workbook
 from werkzeug.utils import secure_filename
 from geopy.distance import geodesic
-import boto3, os, json
-# …
-s3 = boto3.client('s3')
-BUCKET = os.environ['S3_BUCKET']
-
+ 
 # Configuración de la aplicación Flask
 app = Flask(__name__)
 app.secret_key = "super_secret_key"  # Clave secreta para sesiones y flash
  
-app = Flask(__name__)
-app.secret_key = "super_secret_key"
+# Carpeta donde se almacenarán los archivos subidos
 UPLOAD_FOLDER = "uploads"
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
  
 # Diccionario global para simular el "estado de sesión"
 data_store = {}
@@ -319,24 +314,7 @@ def process_excel(file_path):
     
     return df_merged, preview_df, pozos_celestes
 
-@app.route('/process_s3', methods=['POST'])
-def process_s3():
-    data = request.get_json()
-    filename = data['filename']
-    local_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-    # Descarga el .xlsx desde S3 a tu carpeta local
-    s3.download_file(BUCKET, filename, local_path)
 
-    try:
-        df_clean, preview_df, pozos_celestes = process_excel(local_path)
-    except Exception as e:
-        flash(f"Error al procesar: {e}")
-        return render_template('upload.html')
-
-    data_store["df"] = df_clean
-    data_store["celeste_pozos"] = pozos_celestes
-    preview_html = preview_df.to_html(classes="table table-striped", index=False)
-    return render_template("upload_success.html", preview=preview_html)
 
 
  
@@ -346,18 +324,7 @@ def process_s3():
 @app.route("/")
 def index():
     return redirect(url_for("upload_file"))
-
-@app.route('/presign')
-def presign():
-    filename = request.args.get('filename')
-    url = s3.generate_presigned_url(
-        'put_object',
-        Params={'Bucket': BUCKET, 'Key': filename},
-        ExpiresIn=3600
-    )
-    return jsonify({'url': url})
-
-
+ 
 @app.route("/upload", methods=["GET", "POST"])
 def upload_file():
     """
@@ -372,42 +339,41 @@ def upload_file():
     5. Muestra un mensaje de éxito y un preview de las primeras 20 filas.
     """
     if request.method == "POST":
-        file = request.files.get("excel_file")
-        if not file or file.filename == "":
-            flash("No seleccionaste archivo.")
+        # Verificar si se adjuntó el archivo
+        if "excel_file" not in request.files:
+            flash("No se encontró el archivo en la solicitud.")
             return redirect(request.url)
 
-        fname = secure_filename(file.filename)
-        path = os.path.join(app.config['UPLOAD_FOLDER'], fname)
-        file.save(path)
+        file = request.files["excel_file"]
+        # Verificar si el nombre del archivo no está vacío
+        if file.filename == "":
+            flash("No se seleccionó ningún archivo.")
+            return redirect(request.url)
 
-        # guardo en sesión y salto al procesamiento
-        session['pending_excel'] = fname
-        flash("Archivo recibido, procesando en breve…")
-        return redirect(url_for("process_file"))
+        # Guardar el archivo en la carpeta configurada
+        filename = secure_filename(file.filename)
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(filepath)
 
+        # Procesar el Excel dentro de un bloque try-except
+        try:
+            # Ahora process_excel devuelve 3 elementos
+            df_clean, preview_df, pozos_celestes = process_excel(filepath)
+        except Exception as e:
+            flash(f"Error al procesar el Excel: {e}")
+            return redirect(request.url)
+
+        # Almacenar los resultados en data_store (estado de sesión simulado)
+        data_store["df"] = df_clean
+        data_store["celeste_pozos"] = pozos_celestes
+
+        # Notificar y renderizar la vista de éxito con un preview
+        flash("Archivo procesado exitosamente. A continuación se muestra un preview (20 filas).")
+        preview_html = preview_df.to_html(classes="table table-striped", index=False)
+        return render_template("upload_success.html", preview=preview_html)
+
+    # Si es GET, mostrar el formulario de subida
     return render_template("upload.html")
-
-
-# 2) Ruta que efectivamente procesa y arroja el preview
-@app.route("/process")
-def process_file():
-    fname = session.pop('pending_excel', None)
-    if not fname:
-        return redirect(url_for("upload_file"))
-
-    filepath = os.path.join(app.config['UPLOAD_FOLDER'], fname)
-    try:
-        df_clean, preview_df, pozos_celestes = process_excel(filepath)
-    except Exception as e:
-        flash(f"Error al procesar: {e}")
-        return redirect(url_for("upload_file"))
-
-    # almaceno para el resto de la app y muestro preview
-    data_store["df"] = df_clean
-    data_store["celeste_pozos"] = pozos_celestes
-    html = preview_df.to_html(classes="table table-striped", index=False)
-    return render_template("upload_success.html", preview=html)
  
 @app.route("/filter", methods=["GET", "POST"])
 def filter_zonas():
@@ -717,6 +683,7 @@ def assign():
  
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
