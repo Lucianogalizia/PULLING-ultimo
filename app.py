@@ -199,10 +199,10 @@ def index():
     return redirect(url_for("upload_file"))
 
 
- from flask import Flask, request, redirect, url_for, render_template, flash
-
- import pandas as pd
- # … resto de imports …
+from flask import Flask, request, redirect, url_for, render_template, flash
+from flask import jsonify
+import pandas as pd
+# … resto de imports …
 
  # (todas tus funciones step1_load_and_mark, step2_basic_filters, etc. y process_excel)
 
