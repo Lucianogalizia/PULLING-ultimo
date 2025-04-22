@@ -200,58 +200,58 @@ def index():
 
 
  from flask import Flask, request, redirect, url_for, render_template, flash
-+from flask import jsonify
+
  import pandas as pd
  # … resto de imports …
 
  # (todas tus funciones step1_load_and_mark, step2_basic_filters, etc. y process_excel)
 
-+#
-+# ─── RUTAS AJAX PARA PROCESAMIENTO EN 5 PASOS ───────────────────────────
-+#
- @app.route("/process/step1", methods=["POST"])
- def process_step1():
-     if "excel_file" not in request.files:
-         return jsonify({"error": "No se encontró el archivo."}), 400
-     f = request.files["excel_file"]
-     filename = secure_filename(f.filename)
-     path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-     f.save(path)
-     try:
-         df1, preview1 = step1_load_and_mark(path)
-     except Exception as e:
-         return jsonify({"error": str(e)}), 500
-     data_store["df1"] = df1
-     return jsonify(preview1.to_dict(orient="records"))
+#
+# ─── RUTAS AJAX PARA PROCESAMIENTO EN 5 PASOS ───────────────────────────
+#
+@app.route("/process/step1", methods=["POST"])
+def process_step1():
+    if "excel_file" not in request.files:
+        return jsonify({"error": "No se encontró el archivo."}), 400
+    f = request.files["excel_file"]
+    filename = secure_filename(f.filename)
+    path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    f.save(path)
+    try:
+        df1, preview1 = step1_load_and_mark(path)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    data_store["df1"] = df1
+    return jsonify(preview1.to_dict(orient="records"))
 
- @app.route("/process/step2", methods=["POST"])
- def process_step2():
-     df1 = data_store.get("df1")
-     df2, preview2 = step2_basic_filters(df1)
-     data_store["df2"] = df2
-     return jsonify(preview2.to_dict(orient="records"))
+@app.route("/process/step2", methods=["POST"])
+def process_step2():
+    df1 = data_store.get("df1")
+    df2, preview2 = step2_basic_filters(df1)
+    data_store["df2"] = df2
+    return jsonify(preview2.to_dict(orient="records"))
 
- @app.route("/process/step3", methods=["POST"])
- def process_step3():
-     df2 = data_store.get("df2")
-     df3, preview3 = step3_normalize_pozos(df2)
-     data_store["df3"] = df3
-     return jsonify(preview3.to_dict(orient="records"))
+@app.route("/process/step3", methods=["POST"])
+def process_step3():
+    df2 = data_store.get("df2")
+    df3, preview3 = step3_normalize_pozos(df2)
+    data_store["df3"] = df3
+    return jsonify(preview3.to_dict(orient="records"))
 
- @app.route("/process/step4", methods=["POST"])
- def process_step4():
-     df3 = data_store.get("df3")
-     df4, missing = step4_merge_coords(df3)
-     data_store["df4"] = df4
-     return jsonify({"missing_pozos": missing})
+@app.route("/process/step4", methods=["POST"])
+def process_step4():
+    df3 = data_store.get("df3")
+    df4, missing = step4_merge_coords(df3)
+    data_store["df4"] = df4
+    return jsonify({"missing_pozos": missing})
 
- @app.route("/process/step5", methods=["POST"])
- def process_step5():
-     df4 = data_store.get("df4")
-     df_final = step5_finalize(df4)
-     data_store["df"] = df_final    # reemplaza el df limpio
-     return df_final.to_html(classes="table table-striped", index=False)
-+# ────────────────────────────────────────────────────────────────────────
+@app.route("/process/step5", methods=["POST"])
+def process_step5():
+    df4 = data_store.get("df4")
+    df_final = step5_finalize(df4)
+    data_store["df"] = df_final    # reemplaza el df limpio
+    return df_final.to_html(classes="table table-striped", index=False)
+# ────────────────────────────────────────────────────────────────────────
 
 @app.route("/upload", methods=["GET","POST"])
 def upload_file():
