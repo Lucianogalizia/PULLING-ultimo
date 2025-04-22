@@ -328,15 +328,13 @@ def index():
 @app.route("/upload", methods=["GET", "POST"])
 def upload_file():
     """
-    1. Guarda el Excel sin procesar.
-    2. Muestra un flash de éxito.
-    3. Renderiza una página con un botón para continuar.
+    1. Solo guarda el archivo.
+    2. Flash y render de upload_success.html con botón 'Continuar'.
     """
     if request.method == "POST":
         if "excel_file" not in request.files:
             flash("No se encontró el archivo en la solicitud.")
             return redirect(request.url)
-
         file = request.files["excel_file"]
         if file.filename == "":
             flash("No se seleccionó ningún archivo.")
@@ -346,39 +344,41 @@ def upload_file():
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
 
-        # Guardamos la ruta para usarla después
-        data_store["filepath"] = filepath
+        # Guardamos la ruta para la siguiente etapa
+        data_store["uploaded_filepath"] = filepath
 
-        flash("Archivo subido exitosamente.")
-        return render_template("upload_success.html")  # plantilla con botón "Continuar"
+        flash("Archivo cargado con éxito. Pulsa 'Continuar' para procesar.")
+        return render_template("upload_success.html")
 
     return render_template("upload.html")
 
-@app.route("/continue", methods=["POST"])
-def continue_process():
+@app.route("/process", methods=["POST"])
+def process_file():
     """
-    Se dispara al apretar el botón "Continuar".
-    Aquí es donde arrancaría la lógica original (process_excel, etc).
+    1. Toma el filepath guardado.
+    2. Ejecuta process_excel.
+    3. Guarda resultados y muestra preview.
     """
-    filepath = data_store.get("filepath")
-    if not filepath:
-        flash("No se encontró el archivo. Vuelve a subirlo.")
+    if "uploaded_filepath" not in data_store:
+        flash("Debes subir un archivo primero.")
         return redirect(url_for("upload_file"))
+    filepath = data_store["uploaded_filepath"]
 
-    # -- Procesamos el Excel sólo cuando tenemos filepath válido --
     try:
         df_clean, preview_df, pozos_celestes = process_excel(filepath)
     except Exception as e:
         flash(f"Error al procesar el Excel: {e}")
         return redirect(url_for("upload_file"))
 
-    # Guardamos los resultados en el data_store
     data_store["df"] = df_clean
     data_store["celeste_pozos"] = pozos_celestes
 
-    # Notificamos y redirigimos al paso de filtrado
-    flash("Archivo procesado exitosamente, ya puedes filtrar zonas.")
-    return redirect(url_for("filter_zonas"))
+    flash("Procesamiento completado. Aquí tienes un preview (20 filas).")
+    preview_html = preview_df.to_html(classes="table table-striped", index=False)
+    return render_template("upload_success.html", preview=preview_html)
+
+    # Si es GET, mostrar el formulario de subida
+    return render_template("upload.html")
  
 @app.route("/filter", methods=["GET", "POST"])
 def filter_zonas():
@@ -688,6 +688,7 @@ def assign():
  
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
