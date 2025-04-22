@@ -16,11 +16,12 @@ from geopy.distance import geodesic
 app = Flask(__name__)
 app.secret_key = "super_secret_key"  # Clave secreta para sesiones y flash
  
-# Carpeta donde se almacenarán los archivos subidos
+app = Flask(__name__)
+app.secret_key = "super_secret_key"
 UPLOAD_FOLDER = "uploads"
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
  
 # Diccionario global para simular el "estado de sesión"
 data_store = {}
@@ -340,23 +341,24 @@ def upload_file():
     """
     if request.method == "POST":
         file = request.files.get("excel_file")
-        if not file or file.filename=="":
+        if not file or file.filename == "":
             flash("No seleccionaste archivo.")
             return redirect(request.url)
 
         fname = secure_filename(file.filename)
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], fname)
-        file.save(filepath)
+        path = os.path.join(app.config['UPLOAD_FOLDER'], fname)
+        file.save(path)
 
-        # guardo ruta y salto al procesado
+        # guardo en sesión y salto al procesamiento
         session['pending_excel'] = fname
-        flash("Archivo recibido. Procesando en breve…")
+        flash("Archivo recibido, procesando en breve…")
         return redirect(url_for("process_file"))
 
     return render_template("upload.html")
 
 
-@app.route("/process", methods=["GET"])
+# 2) Ruta que efectivamente procesa y arroja el preview
+@app.route("/process")
 def process_file():
     fname = session.pop('pending_excel', None)
     if not fname:
@@ -366,10 +368,10 @@ def process_file():
     try:
         df_clean, preview_df, pozos_celestes = process_excel(filepath)
     except Exception as e:
-        flash(f"Error procesando: {e}")
+        flash(f"Error al procesar: {e}")
         return redirect(url_for("upload_file"))
 
-    # guardo resultados y muestro preview
+    # almaceno para el resto de la app y muestro preview
     data_store["df"] = df_clean
     data_store["celeste_pozos"] = pozos_celestes
     html = preview_df.to_html(classes="table table-striped", index=False)
