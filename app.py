@@ -1,7 +1,7 @@
 # =============================================================================
 # app.py
 # =============================================================================
-from flask import Flask, request, redirect, url_for, render_template, flash
+from flask import Flask, request, redirect, url_for, render_template, flash, jsonify
 import pandas as pd
 import numpy as np
 import datetime
@@ -12,7 +12,7 @@ from openpyxl import load_workbook
 from werkzeug.utils import secure_filename
 from geopy.distance import geodesic
 from difflib import SequenceMatcher
-from flask import jsonify
+
 
 # Configuración de la aplicación Flask
 app = Flask(__name__)
