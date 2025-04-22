@@ -12,26 +12,18 @@ from openpyxl import load_workbook
 from werkzeug.utils import secure_filename
 from geopy.distance import geodesic
  
-import threading, uuid, os
-from flask import Flask, request, render_template, flash, redirect, url_for
-from werkzeug.utils import secure_filename
-
+# Configuración de la aplicación Flask
 app = Flask(__name__)
-app.secret_key = "super_secret_key"
+app.secret_key = "super_secret_key"  # Clave secreta para sesiones y flash
+ 
+# Carpeta donde se almacenarán los archivos subidos
 UPLOAD_FOLDER = "uploads"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
-# Aquí guardamos jobs en curso y sus resultados
-jobs = {}
-
-def worker(job_id, filepath):
-    df_clean, preview_df, pozos_celestes = process_excel(filepath)
-    jobs[job_id] = {
-        "ready": True,
-        "df": df_clean,
-        "preview": preview_df.to_html(classes="table table-striped", index=False),
-        "pozos": pozos_celestes
-    }
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+ 
+# Diccionario global para simular el "estado de sesión"
+data_store = {}
  
 # =============================================================================
 # Funciones Auxiliares
@@ -335,45 +327,53 @@ def index():
  
 @app.route("/upload", methods=["GET", "POST"])
 def upload_file():
+    """
+    Ruta para subir y procesar el archivo Excel.
+    1. Valida que el archivo exista en la solicitud y tenga un nombre.
+    2. Guarda el archivo en la carpeta UPLOAD_FOLDER.
+    3. Llama a process_excel(filepath), que devuelve:
+       - df_clean: DataFrame final limpio.
+       - preview_df: DataFrame con preview (20 filas).
+       - pozos_celestes: Lista de pozos que están pintados de celeste.
+    4. Almacena df_clean y pozos_celestes en data_store para usarlos posteriormente.
+    5. Muestra un mensaje de éxito y un preview de las primeras 20 filas.
+    """
     if request.method == "POST":
-        file = request.files.get("excel_file")
-        if not file or file.filename == "":
-            flash("No seleccionaste archivo.")
+        # Verificar si se adjuntó el archivo
+        if "excel_file" not in request.files:
+            flash("No se encontró el archivo en la solicitud.")
             return redirect(request.url)
 
-        fname = secure_filename(file.filename)
-        path = os.path.join(app.config['UPLOAD_FOLDER'], fname)
-        file.save(path)
+        file = request.files["excel_file"]
+        # Verificar si el nombre del archivo no está vacío
+        if file.filename == "":
+            flash("No se seleccionó ningún archivo.")
+            return redirect(request.url)
 
-        # Generamos un ID único para este procesamiento
-        job_id = str(uuid.uuid4())
-        # Marcamos el job como “en proceso”
-        jobs[job_id] = { "ready": False }
-        # Arrancamos el hilo que hace el process_excel
-        threading.Thread(target=worker, args=(job_id, path), daemon=True).start()
+        # Guardar el archivo en la carpeta configurada
+        filename = secure_filename(file.filename)
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(filepath)
 
-        # Devolvemos de inmediato la página de “Procesando…”
-        return render_template("processing.html", job_id=job_id)
+        # Procesar el Excel dentro de un bloque try-except
+        try:
+            # Ahora process_excel devuelve 3 elementos
+            df_clean, preview_df, pozos_celestes = process_excel(filepath)
+        except Exception as e:
+            flash(f"Error al procesar el Excel: {e}")
+            return redirect(request.url)
 
-    # GET: muestro tu formulario igual que antes
+        # Almacenar los resultados en data_store (estado de sesión simulado)
+        data_store["df"] = df_clean
+        data_store["celeste_pozos"] = pozos_celestes
+
+        # Notificar y renderizar la vista de éxito con un preview
+        flash("Archivo procesado exitosamente. A continuación se muestra un preview (20 filas).")
+        preview_html = preview_df.to_html(classes="table table-striped", index=False)
+        return render_template("upload_success.html", preview=preview_html)
+
+    # Si es GET, mostrar el formulario de subida
     return render_template("upload.html")
-
-# --- y añade esta nueva ruta para consultar el estado ---
-@app.route("/status/<job_id>")
-def status(job_id):
-    job = jobs.get(job_id)
-    if not job:
-        flash("ID de trabajo inválido, por favor vuelve a subir tu archivo.")
-        return redirect(url_for("upload_file"))
-    if not job["ready"]:
-        # Sigue procesando: recarga processing.html
-        return render_template("processing.html", job_id=job_id)
-
-    # Ya terminó: guardo en data_store y muestro resultado
-    data_store["df"] = job["df"]
-    data_store["celeste_pozos"] = job["pozos"]
-    return render_template("upload_success.html", preview=job["preview"])
-
  
 @app.route("/filter", methods=["GET", "POST"])
 def filter_zonas():
